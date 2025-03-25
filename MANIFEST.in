@@ -1,0 +1,2 @@
+recursive-include napari_flima/resources *.png
+include README.md

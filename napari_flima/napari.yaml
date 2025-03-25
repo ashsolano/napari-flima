@@ -1,0 +1,5 @@
+name: napari-hello
+version: 0.1.0
+entry_points:
+  napari.plugin:
+    napari-hello = napari_hello.bmovie_plugin
