@@ -7,6 +7,7 @@ from qtpy.QtWidgets import (
     QSizePolicy, QScrollArea, QWidget
 )
 import os
+from napari_flima import get_logo_path
 
 def set_napari_palette(app):
     """Apply a Napari-inspired dark palette with background #282a36 and text #f8f8f2."""
@@ -126,7 +127,7 @@ class FLIMDialog(QDialog):
 
     def add_logo(self, layout):
         """Adds a centered logo at the top."""
-        logo_path = "/Users/solano.a/Documents/2023 Napari code/napari-hello/logo FLIMa_finalv3-2.png"
+        logo_path = get_logo_path()
         logo_label = QLabel()
         logo_label.setAlignment(Qt.AlignCenter)
         logo_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
