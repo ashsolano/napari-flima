@@ -28,6 +28,8 @@ from qtpy.QtGui import (QFont)
 from bokeh.plotting import figure
 from bokeh.models import ColumnDataSource, Whisker, HoverTool, Label
 
+# generalise logo path 
+from napari_flima import get_logo_path
 
 
 # ------------------- BACKEND FUNCTIONS -------------------
@@ -892,7 +894,7 @@ class ExportResultsWidget(QWidget):
         self.setLayout(layout)
 
         
-        self.original_logo_path = '/Users/solano.a/Documents/2023 Napari code/napari-hello/logo FLIMa_finalv3-2.png'
+        self.logo_path = get_logo_path()
 
     def select_export_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Export Folder")
@@ -1024,6 +1026,8 @@ class ExportResultsWidget(QWidget):
             return
         #print("Active cursor settings:", active_cursors)
         
+        
+        
         # Check export folder.
         export_dir = self.folder_line_edit.text()
         if not export_dir:
@@ -1037,12 +1041,16 @@ class ExportResultsWidget(QWidget):
         
         # Copy the logo file.
         logo_filename = 'logo.png'
-        logo_destination = os.path.join(output_dir, logo_filename)
+        logo_src = self.logo_path
+        logo_dst  = os.path.join(output_dir, logo_filename)
         try:
-            shutil.copyfile(self.original_logo_path, logo_destination)
-            #print(f"Copied logo to: {logo_destination}")
+            shutil.copyfile(logo_src, logo_dst)
+        except FileNotFoundError:
+            # resource wasn’t found in the package—skip or log a warning
+            print(f"Logo not found at {logo_src}, skipping copy.")
         except Exception as e:
-            print(f"Error copying logo: {e}")
+            print(f"Error copying logo from {logo_src}: {e}")
+            
         
         # Retrieve analysis data parts.
         file_gs_data = self.analysis_data.get("file_gs_data", {})
