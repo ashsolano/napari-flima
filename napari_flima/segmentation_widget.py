@@ -19,7 +19,7 @@ from PyQt5.QtGui import QColor  # or: from qtpy.QtGui import QColor, depending o
 from qtpy.QtWidgets import (
     QGroupBox, QVBoxLayout, QWidget, QSizePolicy, QLabel,
     QHBoxLayout, QLineEdit, QPushButton, QCheckBox, QComboBox, QFileDialog,
-    QSpinBox, QDoubleSpinBox
+    QSpinBox, QDoubleSpinBox, QMessageBox
 )
 from qtpy.QtGui import (QFont)
 
@@ -222,14 +222,41 @@ class SegmentationParametersWidget(QWidget):
         group_layout.addWidget(self.segment_button)
         
         # New: Apply Cursor Mask Button.
-        self.apply_mask_button = QPushButton("Apply Cursor Mask")
-        self.apply_mask_button.clicked.connect(self.analyze_cursor_mask)
+        self.apply_mask_button = QPushButton("Compute Cursor Ratios")
+        self.apply_mask_button.clicked.connect(self.on_apply_mask_clicked)
         group_layout.addWidget(self.apply_mask_button)
 
         self.groupbox.setLayout(group_layout)
         layout.addWidget(self.groupbox)
         layout.addStretch()
         self.setLayout(layout)
+        
+    def on_apply_mask_clicked(self):
+        # Disable the button so they can’t click again in the middle
+        self.apply_mask_button.setEnabled(False)
+        try:
+            df_wide = self.analyze_cursor_mask()
+            if df_wide is not None and not df_wide.empty:
+                QMessageBox.information(
+                    self,
+                    "Downstream Analysis",
+                    "Cursor mask analysis complete! "
+                    f"Generated {len(df_wide)} rows."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Downstream Analysis",
+                    "Analysis ran, but no data was generated."
+                )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Downstream Analysis Error",
+                f"An error occurred:\n{e}"
+            )
+        finally:
+            self.apply_mask_button.setEnabled(True)
 
     def run_segmentation(self):
         """
@@ -365,6 +392,18 @@ class SegmentationParametersWidget(QWidget):
         if not self.analysis_data or "cursor_mask_layers" not in self.analysis_data:
             print("No cursor mask layers available in analysis data.")
             return None
+        
+        
+        # --- Handle case where segmentation was skipped ---
+        if not self.segmentation_results:
+            # Create a dummy segmentation: whole image as one object
+            dummy = {}
+            for fname, layer in cursor_mask_layers.items():
+                mask = np.squeeze(layer.data, axis=1)  # shape (T, H, W, 4)
+                T, H, W, _ = mask.shape
+                dummy[fname] = np.ones((T, H, W), dtype=int)
+            self.segmentation_results = dummy
+
         
         rows = []
         # Loop over each file in segmentation_results.
