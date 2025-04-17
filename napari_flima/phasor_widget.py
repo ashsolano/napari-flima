@@ -1439,36 +1439,52 @@ class PhasorWidget(QWidget):
 
     
     
-    
     def replot_phasor(self):
         """
-        Replot the phasor dialog using data from the current file only.
-        If the median filter is applied and smoothed data is available for the current file,
-        that data is used; otherwise, the original data is used.
+        Replot the phasor dialog by timepoint, overlaying every checked file.
+        - If g_array is 3D (T×H×W): we get T pages.
+        - If g_array is 2D: T = 1, so you get one page with all files.
         """
+        # 1) clear old frames
         self.dialog.frames = []
-        if self.current_file is None:
-            print("No current file selected for phasor plotting.")
+    
+        
+        if not self.file_gs_data:
+            print("No files selected for phasor plotting.")
+            self.dialog.plot_universal_circle()
             return
     
-        # Select which data to use for the current file:
-        if self.median_filter_applied and self.current_file in self.smoothed_gs_data:
-            data = self.smoothed_gs_data[self.current_file]
-        else:
-            data = self.file_gs_data.get(self.current_file)
-        if data is None:
-            print(f"No g/s data available for {self.current_file}.")
-            return
+        
+        files = list(self.file_gs_data.keys())
+        # pick the first file to infer T
+        sample = self.file_gs_data[files[0]]
+        data0 = (self.smoothed_gs_data[files[0]]
+                 if self.median_filter_applied and files[0] in self.smoothed_gs_data
+                 else sample)
+        g0 = data0["g_image"]
+        T = g0.shape[0] if g0.ndim == 3 else 1
     
-        g_array = data["g_image"]
-        s_array = data["s_image"]
+        
+        for t in range(T):
+            for fname in files:
+                raw = self.smoothed_gs_data[fname] if (self.median_filter_applied and fname in self.smoothed_gs_data) else self.file_gs_data[fname]
+                g_arr = raw["g_image"]
+                s_arr = raw["s_image"]
+                if g_arr.ndim == 3:
+                    self.dialog.add_frame(g_arr[t], s_arr[t])
+                else:
+                    # 2D data → only one frame, so add on t==0
+                    if t == 0:
+                        self.dialog.add_frame(g_arr, s_arr)
     
-        # Plot only the current file's data.
-        if g_array.ndim == 3:
-            for i in range(g_array.shape[0]):
-                self.dialog.add_frame(g_array[i, :, :], s_array[i, :, :])
-        else:
-            self.dialog.add_frame(g_array, s_array)
+        # 5) force pages = T, with each page = len(files)
+        self.dialog.group_size = len(files)
+        # sync spinner to this
+        self.dialog.group_spin.blockSignals(True)
+        self.dialog.group_spin.setValue(len(files))
+        self.dialog.group_spin.blockSignals(False)
+    
+        # 6) redraw
         self.dialog.update_frame_navigation()
         self.dialog.plot_current_group()
           

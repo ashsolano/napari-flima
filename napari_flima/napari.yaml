@@ -1,5 +1,10 @@
-name: napari-hello
-version: 0.1.0
-entry_points:
-  napari.plugin:
-    napari-hello = napari_hello.bmovie_plugin
+name: napari-flima
+contributions:
+  commands:
+    - id: napari-flima.launch_plugin
+      title: Launch FLIMa Plugin
+      python_name: napari_flima:main
+  widgets:
+    - command: napari-flima.launch_plugin
+      display_name: FLIMa Plugin
+      autogenerate: true
