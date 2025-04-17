@@ -20,6 +20,8 @@ from qtpy.QtWidgets import (
     QGridLayout, QFileDialog, QSlider
 )
 from qtpy.QtCore import QTimer
+from functools import partial
+
 
 import imageio
 
@@ -149,17 +151,14 @@ class NumericDelegate(QStyledItemDelegate):
 class CursorAnalysisWidget(QGroupBox):
     """
     A QTableWidget-based cursor analysis table with:
-      - An "Active" column (checkbox only)
-      - A "Color" column (using ColorSelectorApp)
-      - Numeric columns for R, G, S, τₘ, τₚ with default values.
-      - Automatic row numbering.
-      
-    This version also stores each row's widget references in a persistent list,
-    so you can retrieve user inputs later.
+      - An "Active" checkbox column
+      - A "Color" selector column
+      - Numeric columns for R, G, S, τₘ, τₚ
+      - A fixed-width "Remove" column with an ✕ button to delete the row
     """
     def __init__(self, parent=None, title="Cursor Analysis", font=None):
         super().__init__(title, parent)
-        self.default_font = font if font else QFont("Arial", 12)
+        self.default_font = font or QFont("Arial", 12)
         self.setFont(self.default_font)
         self.setStyleSheet("""
             QGroupBox {
@@ -179,39 +178,32 @@ class CursorAnalysisWidget(QGroupBox):
                 color: #f8f8f2;
             }
         """)
-        
-        main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(8)
-        main_layout.setContentsMargins(5, 5, 5, 5)
-        
-        # Create the table with 7 columns.
-        self.table = QTableWidget(0, 7, self)
-        self.table.setHorizontalHeaderLabels(["", "Color", "R", "G", "S", "τₘ", "τₚ"])
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0,0,0,0)
+
+        # 1) Create the table with 8 columns instead of 7
+        self.table = QTableWidget(0, 8, self)
         self.table.setFont(self.default_font)
-        self.table.verticalHeader().setVisible(True)
-        self.table.verticalHeader().setDefaultSectionSize(24)
+        self.table.setHorizontalHeaderLabels([
+            "Active", "Color", "R", "G", "S", "τₘ", "τₚ", ""
+        ])
+        # Remove extra margins on the table itself
+        self.table.setContentsMargins(0, 0, 0, 0)
+
+        # 2) Fix the last column to button width (no stretch)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Fixed)
-        self.table.setColumnWidth(0, 30)  # Active checkbox
-        self.table.setColumnWidth(1, 60)  # Color
-        self.table.setColumnWidth(2, 40)  # R
-        self.table.setColumnWidth(3, 40)  # G
-        self.table.setColumnWidth(4, 40)  # S
-        self.table.setColumnWidth(5, 50)  # τₘ
-        self.table.setColumnWidth(6, 50)  # τₚ
-        
-        # Optional: Add tooltips for columns 2-6.
-        self.table.horizontalHeaderItem(2).setToolTip("Radius (default 0.05)")
-        self.table.horizontalHeaderItem(3).setToolTip("G-value (default 0.00)")
-        self.table.horizontalHeaderItem(4).setToolTip("S-value (default 0.00)")
-        self.table.horizontalHeaderItem(5).setToolTip("Modulation Lifetime (default 0.00)")
-        self.table.horizontalHeaderItem(6).setToolTip("Phase Lifetime (default 0.00)")
-        
-        # Fix the vertical height.
-        self.table.setFixedHeight(100)
-        main_layout.addWidget(self.table)
-        
-        # Button row to add new cursor rows.
+        header.setSectionResizeMode(7, QHeaderView.Fixed)
+        self.table.setColumnWidth(7, 24)
+
+        # Optionally set reasonable widths for other columns
+        widths = [50, 60, 40, 40, 40, 50, 50]
+        for idx, w in enumerate(widths):
+            self.table.setColumnWidth(idx, w)
+
+        layout.addWidget(self.table)
+
+        # “Add Cursor” button
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
         add_cursor_btn = QPushButton("Add Cursor")
@@ -229,83 +221,109 @@ class CursorAnalysisWidget(QGroupBox):
         """)
         add_cursor_btn.clicked.connect(self.add_cursor_row)
         btn_layout.addWidget(add_cursor_btn)
-        main_layout.addLayout(btn_layout)
-        
-        self.setLayout(main_layout)
-        
-        # This list will store a dictionary for each row’s widget references.
+        layout.addLayout(btn_layout)
+
         self.cursor_rows_data = []
 
     def add_cursor_row(self):
-        """Insert a new row at the bottom with default values: R=0.05, others=0.00."""
+        """Insert a new row with Active, Color, R, G, S, τₘ, τₚ, and Remove."""
         row = self.table.rowCount()
         self.table.insertRow(row)
-        
         row_data = {}
-        
-        # Column 0: Active checkbox.
-        checkbox_widget = QWidget()
-        ch_layout = QHBoxLayout(checkbox_widget)
-        ch_layout.setContentsMargins(0, 0, 0, 0)
-        ch_layout.setSpacing(0)
+
+        # Column 0: Active checkbox
         checkbox = QCheckBox()
-        ch_layout.addStretch()
-        ch_layout.addWidget(checkbox)
-        ch_layout.addStretch()
-        self.table.setCellWidget(row, 0, checkbox_widget)
+        wrapper = QWidget()
+        hl = QHBoxLayout(wrapper)
+        hl.setContentsMargins(0,0,0,0)
+        hl.addStretch(); hl.addWidget(checkbox); hl.addStretch()
+        self.table.setCellWidget(row, 0, wrapper)
+        checkbox.stateChanged.connect(
+            lambda state, idx=row: self.parent().cursor_checkbox_state_changed(state, idx)
+        )
         row_data["checkbox"] = checkbox
-        
-        # Connect the checkbox's stateChanged signal to the parent's method.
-        # Here, self.parent() should return the PhasorWidget.
-        checkbox.stateChanged.connect(lambda state, idx=row: self.parent().cursor_checkbox_state_changed(state, idx))
-    
-        
-        # Column 1: Color selection (using ColorSelectorApp).
+
+        # Column 1: Color selector
         color_selector = ColorSelectorApp()
         color_selector.setFixedWidth(50)
         self.table.setCellWidget(row, 1, color_selector)
         row_data["color_selector"] = color_selector
-        
-        # Columns 2 to 6: Numeric values.
-        # R defaults to 0.05; others default to 0.00.
-        default_values = ["0.05", "0.00", "0.00", "0.00", "0.00"]
-        for i, col in enumerate([2, 3, 4, 5, 6]):
-            text_val = default_values[i]
-            item = QTableWidgetItem(text_val)
+
+        # Columns 2–6: Numeric defaults
+        defaults = ["0.05","0.00","0.00","0.00","0.00"]
+        for i, col in enumerate([2,3,4,5,6]):
+            item = QTableWidgetItem(defaults[i])
+            item.setTextAlignment(Qt.AlignCenter)
             item.setBackground(QBrush(QColor("white")))
             item.setForeground(QBrush(QColor("black")))
-            item.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row, col, item)
             row_data[f"col_{col}"] = item
-        
-        # Save the row data for later retrieval.
+
+        # Column 7: Remove button (fixed, no margins)
+        remove_btn = QPushButton("✕")
+        remove_btn.setFixedWidth(24)
+        remove_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        remove_btn.setStyleSheet("""
+            QPushButton {
+                border: none;
+                font-weight: bold;
+                color: #c0392b;
+            }
+            QPushButton:hover {
+                background-color: rgba(192, 57, 43, 0.1);
+            }
+        """)
+        # wrap to center with zero margins
+        btn_container = QWidget()
+        ph = QHBoxLayout(btn_container)
+        ph.setContentsMargins(0,0,0,0)
+        ph.addStretch(); ph.addWidget(remove_btn); ph.addStretch()
+        self.table.setCellWidget(row, 7, btn_container)
+        remove_btn.clicked.connect(partial(self._remove_cursor_row, row))
+        row_data["remove_btn"] = remove_btn
+
         self.cursor_rows_data.append(row_data)
-        #print("Added new cursor row. Total now:", len(self.cursor_rows_data))
-        
 
-    
+    def _remove_cursor_row(self, row):
+        """Remove the row and any associated cursor patch."""
+        rd = self.cursor_rows_data[row]
+        # If still active, toggle off to remove patch
+        if rd["checkbox"].isChecked():
+            rd["checkbox"].setChecked(False)
+        else:
+            # ensure no lingering patch
+            self.parent().dialog.remove_cursor(row)
+
+        # Remove the UI row and data
+        self.table.removeRow(row)
+        self.cursor_rows_data.pop(row)
+
+        # Re-wire indices
+        for new_row, rd in enumerate(self.cursor_rows_data):
+            cb = rd["checkbox"]
+            cb.stateChanged.disconnect()
+            cb.stateChanged.connect(
+                lambda state, idx=new_row: self.parent().cursor_checkbox_state_changed(state, idx)
+            )
+            btn = rd["remove_btn"]
+            btn.clicked.disconnect()
+            btn.clicked.connect(partial(self._remove_cursor_row, new_row))
+
     def get_cursor_settings(self):
-        #print("get_cursor_settings() called.")
-        #print("Cursor rows count:", len(self.cursor_rows_data))
+        """Return settings for all active cursors."""
         settings = []
-        for row_data in self.cursor_rows_data:
-            # Only include active rows if you want that filtering:
-            if row_data["checkbox"].isChecked():
-                row_setting = {
+        for rd in self.cursor_rows_data:
+            if rd["checkbox"].isChecked():
+                settings.append({
                     "active": True,
-                    "color": row_data["color_selector"].currentText(),
-                    "radius": float(row_data["col_2"].text()),
-                    "g_value": float(row_data["col_3"].text()),
-                    "s_value": float(row_data["col_4"].text()),
-                    "tau_m": float(row_data["col_5"].text()),
-                    "tau_p": float(row_data["col_6"].text()),
-                }
-                settings.append(row_setting)
-        #print("get_cursor_settings() returns:", settings)
+                    "color": rd["color_selector"].currentText(),
+                    "radius": float(rd["col_2"].text()),
+                    "g_value": float(rd["col_3"].text()),
+                    "s_value": float(rd["col_4"].text()),
+                    "tau_m": float(rd["col_5"].text()),
+                    "tau_p": float(rd["col_6"].text()),
+                })
         return settings
-
-
-
 
 # ---------------------------------------------------------------------------
 # Supporting utils file selection table 
