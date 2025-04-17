@@ -27,6 +27,8 @@ from qtpy.QtGui import (QFont)
 # Bokeh imports
 from bokeh.plotting import figure
 from bokeh.models import ColumnDataSource, Whisker, HoverTool, Label
+from bokeh.embed    import components
+from bokeh.resources import CDN
 
 # generalise logo path 
 from napari_flima import get_logo_path
@@ -814,7 +816,7 @@ def create_violin_figures(df_wide, cursors=None):
 
 def convert_fig_to_interactive(fig):
     from bokeh.embed import components
-    script, div = components(fig)
+    script, div = components(fig, resources=CDN)
     return script + div
 
 
