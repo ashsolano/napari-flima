@@ -815,8 +815,8 @@ def create_violin_figures(df_wide, cursors=None):
 
 
 def convert_fig_to_interactive(fig):
-    from bokeh.embed import components
-    script, div = components(fig, resources=CDN)
+    #from bokeh.embed import components
+    script, div = components(fig)
     return script + div
 
 
@@ -1255,8 +1255,8 @@ class ExportResultsWidget(QWidget):
           </script>
           
           <!-- BokehJS Resources -->
-          <link href="https://cdn.bokeh.org/bokeh/release/bokeh-3.4.0.min.css" rel="stylesheet" type="text/css">
-          <script src="https://cdn.bokeh.org/bokeh/release/bokeh-3.4.0.min.js"></script>
+          <link href="https://cdn.bokeh.org/bokeh/release/bokeh-3.7.0.min.css" rel="stylesheet" type="text/css">
+          <script src="https://cdn.bokeh.org/bokeh/release/bokeh-3.7.0.min.js"></script>
   
         
           <style>
