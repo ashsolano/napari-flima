@@ -1074,59 +1074,90 @@ class PhasorPlotDialog(QDialog):
         clipboard.setPixmap(pixmap)
     
     
+    # def save_all_phasor_frames(self, output_dir):
+    #     """
+    #     Save all phasor frames to the specified output directory using imageio.
+    #     This method iterates over each frame, updates the plot,
+    #     converts the canvas to a NumPy array, and writes it as a PNG.
+    #     """
+        
+    #     os.makedirs(output_dir, exist_ok=True)
+        
+    #     # Save the original facecolor so we can restore it later.
+    #     orig_fc = self.fig.get_facecolor()
+    #     self.fig.patch.set_facecolor('white')
+        
+    #     total_frames = len(self.frames)  # Adjust if your frame storage is different.
+        
+    #     for idx in range(total_frames):
+    #         # Set the current frame.
+    #         self.current_group = idx
+    #         self.plot_current_group()  # Update the plot to show frame idx.
+    #         self.fig.canvas.draw()     # Force a redraw of the canvas.
+            
+    #         # Get the current canvas size (display size).
+    #         width, height = self.fig.canvas.get_width_height()
+    #         # Get the raw RGB string from the canvas.
+    #         raw = self.fig.canvas.tostring_rgb()
+    #         img_array = np.frombuffer(raw, dtype=np.uint8)
+            
+    #         # Determine the scale factor by comparing the expected size (width*height*3)
+    #         # with the buffer length.
+    #         expected_size = width * height * 3
+    #         scale = int(np.sqrt(len(img_array) / expected_size))
+    #         if scale < 1:
+    #             scale = 1
+    #         new_height = height * scale
+    #         new_width = width * scale
+            
+    #         try:
+    #             img_array = img_array.reshape((new_height, new_width, 3))
+    #         except Exception as e:
+    #             print(f"Error reshaping image array at frame {idx}: {e}")
+    #             continue
+            
+    #         # Construct the file path and save the image.
+    #         file_path = os.path.join(output_dir, f"phasor_{idx}.png")
+    #         imageio.imwrite(file_path, img_array)
+    #         #print(f"Saved phasor frame {idx} to {file_path}")
+        
+    #     # Restore the original facecolor.
+    #     self.fig.patch.set_facecolor(orig_fc)
+    
     def save_all_phasor_frames(self, output_dir):
         """
         Save all phasor frames to the specified output directory using imageio.
         This method iterates over each frame, updates the plot,
         converts the canvas to a NumPy array, and writes it as a PNG.
         """
-        
+
         os.makedirs(output_dir, exist_ok=True)
-        
+
         # Save the original facecolor so we can restore it later.
         orig_fc = self.fig.get_facecolor()
         self.fig.patch.set_facecolor('white')
-        
-        total_frames = len(self.frames)  # Adjust if your frame storage is different.
-        
+
+        total_frames = len(self.frames)
+
         for idx in range(total_frames):
-            # Set the current frame.
+            # 1) Set the current frame and redraw
             self.current_group = idx
-            self.plot_current_group()  # Update the plot to show frame idx.
-            self.fig.canvas.draw()     # Force a redraw of the canvas.
-            
-            # Get the current canvas size (display size).
-            width, height = self.fig.canvas.get_width_height()
-            # Get the raw RGB string from the canvas.
-            raw = self.fig.canvas.tostring_rgb()
-            img_array = np.frombuffer(raw, dtype=np.uint8)
-            
-            # Determine the scale factor by comparing the expected size (width*height*3)
-            # with the buffer length.
-            expected_size = width * height * 3
-            scale = int(np.sqrt(len(img_array) / expected_size))
-            if scale < 1:
-                scale = 1
-            new_height = height * scale
-            new_width = width * scale
-            
-            try:
-                img_array = img_array.reshape((new_height, new_width, 3))
-            except Exception as e:
-                print(f"Error reshaping image array at frame {idx}: {e}")
-                continue
-            
-            # Construct the file path and save the image.
+            self.plot_current_group()
+            self.fig.canvas.draw()
+
+            # 2) Grab the RGBA buffer directly from the Agg renderer
+            #    This returns an (H, W, 4) uint8 array.
+            rgba = self.fig.canvas.renderer.buffer_rgba()
+            img_array = np.asarray(rgba)
+
+            # 3) Write out the frame
             file_path = os.path.join(output_dir, f"phasor_{idx}.png")
             imageio.imwrite(file_path, img_array)
-            #print(f"Saved phasor frame {idx} to {file_path}")
-        
+
         # Restore the original facecolor.
         self.fig.patch.set_facecolor(orig_fc)
 
 
-
-        
 
 
 #------------------------------------------------------------------------------
