@@ -329,7 +329,7 @@ class FLIMDialog(QDialog):
         pass
 
     def confirm_settings(self):
-        """Collects and displays a summary of the current settings, then accepts the dialog."""
+        """Collects a summary, asks the user to proceed, and only accepts on Yes."""
         flim_type = self.flim_type_combo.currentText()
         laser_freq = self.laser_freq_spin.value()
         harmonic = self.harmonic_spin.value()
@@ -343,11 +343,24 @@ class FLIMDialog(QDialog):
             f"Harmonic: {harmonic}\n"
             f"Number of Channels: {num_channels}\n"
             f"Channel Assignments: {channel_assignments}\n"
-            f"Calculate G & S: {'Yes' if gs_calc else 'No'}"
+            f"Calculate G & S: {'Yes' if gs_calc else 'No'}\n\n"
+            "Proceed with these settings?"
         )
-        # from qtpy.QtWidgets import QMessageBox
-        QMessageBox.information(self, "Settings Confirmed", summary)
-        self.accept()
+
+        # Ask Yes / No
+        reply = QMessageBox.question(
+            self,
+            "Confirm FLIM Data Parameters",
+            summary,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply == QMessageBox.Yes:
+            self.accept()
+        else:
+            # user chose No: do nothing, leave dialog open
+            return
 
     def get_parameters(self):
         """
