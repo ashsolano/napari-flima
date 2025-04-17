@@ -962,8 +962,8 @@ class PhasorPlotDialog(QDialog):
         self.ax.set_ylim(0, 1)
         self.ax.set_xticks([0, 0.5, 1])
         self.ax.set_yticks([0, 0.5, 1])
-        self.ax.set_xlabel("S", fontsize=9, color="black")
-        self.ax.set_ylabel("G", fontsize=9, color="black")
+        self.ax.set_xlabel("G", fontsize=9, color="black")
+        self.ax.set_ylabel("S", fontsize=9, color="black")
         self.ax.tick_params(axis='both', labelsize=8, direction='in', colors="black")
         # Black border
         for spine in self.ax.spines.values():
