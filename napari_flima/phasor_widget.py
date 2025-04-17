@@ -613,44 +613,56 @@ class FileSelectionTable(QGroupBox):
 # Supporting utils for  phasor plot dialog 
 
 class PlotCanvas(FigureCanvas):
-    """Canvas supporting draggable cursors on a Matplotlib axis."""
+    """Canvas supporting draggable cursors on a Matplotlib axis, with blitting for speed."""
     cursorReleased = Signal(int, float, float)  # (cursor_index, x, y)
 
     def __init__(self, fig, ax, parent=None):
-        # Force a white background for the figure/axes:
-        matplotlib.rcParams['figure.facecolor'] = "white"
-        matplotlib.rcParams['axes.facecolor']   = "white"
-        matplotlib.rcParams['axes.edgecolor']   = '#000000'
-        matplotlib.rcParams['xtick.color']      = '#000000'
-        matplotlib.rcParams['ytick.color']      = '#000000'
-        matplotlib.rcParams['text.color']       = '#000000'
-        matplotlib.rcParams['axes.labelcolor']  = '#000000'
-
         super().__init__(fig)
         self.setParent(parent)
         self.ax = ax
 
+        # enforce white figure/axes background
+        matplotlib.rcParams.update({
+            'figure.facecolor': "white",
+            'axes.facecolor':   "white",
+            'axes.edgecolor':   '#000000',
+            'xtick.color':      '#000000',
+            'ytick.color':      '#000000',
+            'text.color':       '#000000',
+            'axes.labelcolor':  '#000000',
+        })
+
         self.draggable_cursors = []
         self.selected_cursor = None
-        self.offset = (0, 0)
+        self.offset = (0,0)
+        self.background = None
 
-        # Connect mouse events for dragging
-        self.mpl_connect('button_press_event', self.on_press)
-        self.mpl_connect('motion_notify_event', self.on_motion)
+        # Connect mouse events
+        self.mpl_connect('button_press_event',   self.on_press)
+        self.mpl_connect('motion_notify_event',  self.on_motion)
         self.mpl_connect('button_release_event', self.on_release)
 
+        # Initial draw of the universal circle (no scatter yet)
+        self.plot_universal_circle()
+        self.background = self.copy_from_bbox(self.ax.bbox)
+
     def add_draggable_cursor(self, x, y, radius, color='blue'):
-        circle = plt.Circle((x, y), radius, edgecolor=color, facecolor='none', lw=2, zorder=10)
+        circle = plt.Circle((x, y), radius,
+                            edgecolor=color, facecolor='none',
+                            lw=2, zorder=10)
         self.ax.add_patch(circle)
         self.draggable_cursors.append(circle)
+        # after adding, do a full redraw & recache background:
         self.draw()
+        self.background = self.copy_from_bbox(self.ax.bbox)
 
     def remove_draggable_cursor(self, idx):
         if 0 <= idx < len(self.draggable_cursors):
-            circle = self.draggable_cursors[idx]
+            circle = self.draggable_cursors.pop(idx)
             circle.remove()
-            del self.draggable_cursors[idx]
+            # full redraw & recache background:
             self.draw()
+            self.background = self.copy_from_bbox(self.ax.bbox)
 
     def on_press(self, event):
         if event.inaxes:
@@ -658,15 +670,24 @@ class PlotCanvas(FigureCanvas):
                 contains, _ = cursor.contains(event)
                 if contains:
                     self.selected_cursor = cursor
-                    x, y = self.selected_cursor.center
-                    self.offset = (x - event.xdata, y - event.ydata)
+                    # cache fresh background (without the cursor drawn)
+                    self.background = self.copy_from_bbox(self.ax.bbox)
+                    x0, y0 = cursor.center
+                    self.offset = (x0 - event.xdata, y0 - event.ydata)
                     break
 
     def on_motion(self, event):
-        if event.inaxes and self.selected_cursor is not None:
-            x, y = event.xdata + self.offset[0], event.ydata + self.offset[1]
-            self.selected_cursor.center = (x, y)
-            self.draw()
+        if self.selected_cursor is None or event.inaxes is None:
+            return
+
+        # compute new center
+        x, y = event.xdata + self.offset[0], event.ydata + self.offset[1]
+        self.selected_cursor.center = (x, y)
+
+        # blit workflow
+        self.restore_region(self.background)           # restore background
+        self.ax.draw_artist(self.selected_cursor)      # draw only the moving cursor
+        self.blit(self.ax.bbox)                        # blit only the axes area
 
     def on_release(self, event):
         if self.selected_cursor is not None:
@@ -674,6 +695,28 @@ class PlotCanvas(FigureCanvas):
             idx = self.draggable_cursors.index(self.selected_cursor)
             self.cursorReleased.emit(idx, x, y)
             self.selected_cursor = None
+
+            # final full draw to re‑render everything cleanly
+            self.draw()
+            self.background = self.copy_from_bbox(self.ax.bbox)
+
+    def plot_universal_circle(self):
+        self.ax.clear()
+        self.ax.set_aspect('equal', adjustable='box')
+        theta = np.linspace(0, 2*np.pi, 200)
+        xunit = 0.5 + 0.5 * np.cos(theta)
+        yunit = 0.5 * np.sin(theta)
+        self.ax.plot(xunit, yunit, color="#888888", linewidth=1.2)
+        self.ax.set_xlim(0, 1); self.ax.set_ylim(0, 1)
+        self.ax.set_xticks([0, 0.5, 1]); self.ax.set_yticks([0, 0.5, 1])
+        self.ax.set_xlabel("S", fontsize=9, color="black")
+        self.ax.set_ylabel("G", fontsize=9, color="black")
+        self.ax.tick_params(axis='both', labelsize=8, direction='in', colors="black")
+        for spine in self.ax.spines.values():
+            spine.set_color("black"); spine.set_linewidth(1.5)
+        self.draw()
+        self.background = self.copy_from_bbox(self.ax.bbox)
+        
 
 # ---------------------------------------------------------------------------
 # main phasor plot dialog 
