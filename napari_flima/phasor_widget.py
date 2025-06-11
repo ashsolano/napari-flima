@@ -939,8 +939,32 @@ class PhasorPlotDialog(QDialog):
         self.plot_universal_circle()
 
         
+    # def update_frame_navigation(self):
+    #     total_frames = len(self.frames)
+    #     total_groups = ceil(total_frames / self.group_size) if total_frames > 0 else 1
+    #     if self.current_group >= total_groups:
+    #         self.current_group = total_groups - 1
+    #     self.frame_slider.blockSignals(True)
+    #     self.frame_spin.blockSignals(True)
+    #     self.frame_slider.setMaximum(total_groups)
+    #     self.frame_spin.setMaximum(total_groups)
+    #     self.frame_slider.setValue(self.current_group + 1)
+    #     self.frame_spin.setValue(self.current_group + 1)
+    #     self.frame_slider.blockSignals(False)
+    #     self.frame_spin.blockSignals(False)
+        
     def update_frame_navigation(self):
         total_frames = len(self.frames)
+        # Restrict group size to available frames
+        self.group_spin.blockSignals(True)
+        self.group_spin.setMaximum(total_frames if total_frames > 0 else 1)
+        if self.group_size > total_frames:
+            self.group_size = total_frames if total_frames > 0 else 1
+            self.group_spin.setValue(self.group_size)
+        # Optionally disable group size if only 1 frame
+        self.group_spin.setEnabled(total_frames > 1)
+        self.group_spin.blockSignals(False)
+    
         total_groups = ceil(total_frames / self.group_size) if total_frames > 0 else 1
         if self.current_group >= total_groups:
             self.current_group = total_groups - 1
@@ -952,6 +976,7 @@ class PhasorPlotDialog(QDialog):
         self.frame_spin.setValue(self.current_group + 1)
         self.frame_slider.blockSignals(False)
         self.frame_spin.blockSignals(False)
+
 
     def on_slider_changed(self, value):
         
@@ -975,6 +1000,7 @@ class PhasorPlotDialog(QDialog):
 
     def add_frame(self, g_array, s_array):
         self.frames.append((g_array, s_array))
+        print("Num frames in PhasorPlotDialog:", len(self.frames))
         self.update_frame_navigation()
 
     def plot_current_group(self):
@@ -1074,55 +1100,7 @@ class PhasorPlotDialog(QDialog):
         clipboard.setPixmap(pixmap)
     
     
-    # def save_all_phasor_frames(self, output_dir):
-    #     """
-    #     Save all phasor frames to the specified output directory using imageio.
-    #     This method iterates over each frame, updates the plot,
-    #     converts the canvas to a NumPy array, and writes it as a PNG.
-    #     """
-        
-    #     os.makedirs(output_dir, exist_ok=True)
-        
-    #     # Save the original facecolor so we can restore it later.
-    #     orig_fc = self.fig.get_facecolor()
-    #     self.fig.patch.set_facecolor('white')
-        
-    #     total_frames = len(self.frames)  # Adjust if your frame storage is different.
-        
-    #     for idx in range(total_frames):
-    #         # Set the current frame.
-    #         self.current_group = idx
-    #         self.plot_current_group()  # Update the plot to show frame idx.
-    #         self.fig.canvas.draw()     # Force a redraw of the canvas.
-            
-    #         # Get the current canvas size (display size).
-    #         width, height = self.fig.canvas.get_width_height()
-    #         # Get the raw RGB string from the canvas.
-    #         raw = self.fig.canvas.tostring_rgb()
-    #         img_array = np.frombuffer(raw, dtype=np.uint8)
-            
-    #         # Determine the scale factor by comparing the expected size (width*height*3)
-    #         # with the buffer length.
-    #         expected_size = width * height * 3
-    #         scale = int(np.sqrt(len(img_array) / expected_size))
-    #         if scale < 1:
-    #             scale = 1
-    #         new_height = height * scale
-    #         new_width = width * scale
-            
-    #         try:
-    #             img_array = img_array.reshape((new_height, new_width, 3))
-    #         except Exception as e:
-    #             print(f"Error reshaping image array at frame {idx}: {e}")
-    #             continue
-            
-    #         # Construct the file path and save the image.
-    #         file_path = os.path.join(output_dir, f"phasor_{idx}.png")
-    #         imageio.imwrite(file_path, img_array)
-    #         #print(f"Saved phasor frame {idx} to {file_path}")
-        
-    #     # Restore the original facecolor.
-    #     self.fig.patch.set_facecolor(orig_fc)
+    
     
     def save_all_phasor_frames(self, output_dir):
         """
@@ -1156,6 +1134,31 @@ class PhasorPlotDialog(QDialog):
 
         # Restore the original facecolor.
         self.fig.patch.set_facecolor(orig_fc)
+
+
+# ---------------------------------------------------------------------------
+# Supporting utils for generalisable file import
+
+def extract_channel(data, channel_idx=0):
+    """
+    Returns the channel image for thresholding, robust to 2D, 3D, or 4D input.
+    Always returns:
+      - (t, y, x) if 4D input
+      - (y, x) if 3D input
+      - (y, x) if 2D input
+    """
+    if data.ndim == 4:
+        return data[:, channel_idx, :, :].copy()
+    elif data.ndim == 3:
+        # Guess channel vs time-first by shape
+        if data.shape[0] < 10:
+            return data[channel_idx, :, :].copy()
+        else:
+            return data[:, :, :].copy()
+    elif data.ndim == 2:
+        return data.copy()
+    else:
+        raise ValueError(f"Unsupported array shape: {data.shape}")
 
 
 
@@ -1264,23 +1267,9 @@ class PhasorWidget(QWidget):
     
     
             
-   
-    
     def update_image_layer(self, file_name, threshold):
-        """
-        Applies threshold to the intensity channel of file_name's image,
-        and creates/updates a red overlay named <file_name>_mask.
-        If grid is enabled, the overlay is placed in the same cell as the image.
-        If grid is disabled, the image and overlay are moved to the top of the layer list.
-        """
         channel_map = self.intro_params.get("channel_assignments", [])
-        flim_type = self.intro_params.get("flim_type", "FD FLIM")
         intensity_idx = channel_map.index("Intensity") if "Intensity" in channel_map else 0
-        #print("Channel assignments:", channel_map)
-        #print("FLIM type:", flim_type)
-        #print("Intensity channel index:", intensity_idx)
-    
-        # 1) Find the matching image layer
         image_layer = None
         for layer in self.viewer.layers:
             if (
@@ -1290,79 +1279,57 @@ class PhasorWidget(QWidget):
             ):
                 image_layer = layer
                 break
-    
         if image_layer is None:
             print(f"No matching image layer found for {file_name}.")
             return
-    
-        # 2) Retrieve data & checkbox state
         original_data = self.file_selection_widget.file_rows[file_name]["layer_data"]
         checkbox_checked = self.file_selection_widget.file_rows[file_name]["checkbox"].isChecked()
         mask_layer_name = file_name + "_mask"
     
-        # 3) FD FLIM vs TCSPC FLIM thresholding
-        if flim_type == "FD FLIM":
-            # shape: [channels, height, width]
-            intensity_image = original_data[intensity_idx, :, :].copy()
+        # --- Universal thresholding logic ---
+        intensity_image = extract_channel(original_data, intensity_idx)
+        if intensity_image.ndim == 3:
             mask = intensity_image < threshold
-            #print("Mask shape (FD FLIM):", mask.shape)
-    
-            if not checkbox_checked:
-                rgba_mask = np.zeros((mask.shape[0], mask.shape[1], 4), dtype=np.uint8)
-                rgba_mask[mask, 0] = 255  # Red
-                rgba_mask[mask, 3] = 128  # Semi-transparent
-                if mask.sum() > 0:
-                    overlay = self._create_or_update_overlay(mask_layer_name, rgba_mask)
-                else:
-                    self.remove_overlay(mask_layer_name)
-            else:
-                self.remove_overlay(mask_layer_name)
-    
-            # Apply threshold
-            intensity_image[mask] = 0
-            updated_data = original_data.copy()
-            updated_data[intensity_idx, :, :] = intensity_image
-            self.intensity = intensity_image.copy()
-    
+            mask0 = mask[0]
         else:
-            # TCSPC FLIM: [time, channels, height, width]
-            intensity_image = original_data[:, intensity_idx, :, :].copy()
-            mask = intensity_image < threshold  # shape: (num_frames, height, width)
-            #print("Mask shape (TCSPC FLIM):", mask.shape)
-    
-            if not checkbox_checked:
-                # Only show red overlay for the first frame
-                rgba_mask = np.zeros((mask.shape[1], mask.shape[2], 4), dtype=np.uint8)
-                rgba_mask[mask[0], 0] = 255
-                rgba_mask[mask[0], 3] = 128
-                if mask[0].sum() > 0:
-                    overlay = self._create_or_update_overlay(mask_layer_name, rgba_mask)
-                else:
-                    self.remove_overlay(mask_layer_name)
+            mask = intensity_image < threshold
+            mask0 = mask
+        if not checkbox_checked:
+            rgba_mask = np.zeros(mask0.shape + (4,), dtype=np.uint8)
+            rgba_mask[mask0, 0] = 255
+            rgba_mask[mask0, 3] = 128
+            if mask0.sum() > 0:
+                overlay = self._create_or_update_overlay(mask_layer_name, rgba_mask)
             else:
                 self.remove_overlay(mask_layer_name)
-    
-            # Apply threshold
-            intensity_image[mask] = 0
-            updated_data = original_data.copy()
+        else:
+            self.remove_overlay(mask_layer_name)
+        # Apply threshold
+        intensity_image[mask] = 0
+        # Copy back into right place in data
+        updated_data = original_data.copy()
+        if original_data.ndim == 4:
             updated_data[:, intensity_idx, :, :] = intensity_image
-            self.intensity = intensity_image.copy()
-    
-        # 4) Update the image layer
+        elif original_data.ndim == 3 and original_data.shape[0] < 10:
+            updated_data[intensity_idx, :, :] = intensity_image
+        elif original_data.ndim == 3:
+            updated_data[:, :, :] = intensity_image
+        elif original_data.ndim == 2:
+            updated_data[:, :] = intensity_image
+        else:
+            raise ValueError(f"Unexpected shape for update: {original_data.shape}")
+        self.intensity = intensity_image.copy()
         image_layer.data = updated_data
         image_layer.refresh()
         self.current_mask = mask
-    
-        # 5) If the overlay exists, position it either in the same grid cell or stacked on top
+        # Overlay positioning logic as before...
         if mask_layer_name in self.viewer.layers:
             overlay_layer = self.viewer.layers[mask_layer_name]
             if self.viewer.grid.enabled:
-                # Copy the image's grid metadata if it exists
                 if hasattr(image_layer, "metadata") and "grid" in image_layer.metadata:
                     overlay_layer.metadata = overlay_layer.metadata or {}
                     overlay_layer.metadata["grid"] = image_layer.metadata["grid"]
                 else:
-                    # fallback: use file_order
                     try:
                         idx = self.file_order.index(file_name)
                     except ValueError:
@@ -1370,8 +1337,10 @@ class PhasorWidget(QWidget):
                     overlay_layer.metadata = overlay_layer.metadata or {}
                     overlay_layer.metadata["grid"] = (0, idx)
             else:
-                # Grid disabled: Move both the image layer & overlay to the top
                 self._bring_to_top(image_layer, overlay_layer)
+
+    
+   
     
     def _create_or_update_overlay(self, layer_name, rgba_mask):
         """Helper to create or update an overlay layer with the given name."""
@@ -1529,26 +1498,72 @@ class PhasorWidget(QWidget):
         # Finally, replot the phasor using only the g/s data from checked files.
         self.replot_phasor()
 
-    
-    
-    def replot_phasor(self):
-        """
-        Replot the phasor dialog by timepoint, overlaying every checked file.
-        - If g_array is 3D (T×H×W): we get T pages.
-        - If g_array is 2D: T = 1, so you get one page with all files.
-        """
-        # 1) clear old frames
-        self.dialog.frames = []
+     
+    # def replot_phasor(self):
+    #     """
+    #     Replot the phasor dialog by timepoint, overlaying every checked file.
+    #     - If g_array is 3D (T×H×W): we get T pages.
+    #     - If g_array is 2D: T = 1, so you get one page with all files.
+    #     """
+    #     # 1) clear old frames
+    #     self.dialog.frames = []
     
         
+    #     if not self.file_gs_data:
+    #         print("No files selected for phasor plotting.")
+    #         self.dialog.plot_universal_circle()
+    #         return
+    
+        
+    #     files = list(self.file_gs_data.keys())
+    #     # pick the first file to infer T
+    #     sample = self.file_gs_data[files[0]]
+    #     data0 = (self.smoothed_gs_data[files[0]]
+    #              if self.median_filter_applied and files[0] in self.smoothed_gs_data
+    #              else sample)
+    #     g0 = data0["g_image"]
+    #     T = g0.shape[0] if g0.ndim == 3 else 1
+    
+        
+    #     for t in range(T):
+    #         for fname in files:
+    #             raw = self.smoothed_gs_data[fname] if (self.median_filter_applied and fname in self.smoothed_gs_data) else self.file_gs_data[fname]
+    #             g_arr = raw["g_image"]
+    #             s_arr = raw["s_image"]
+    #             if g_arr.ndim == 3:
+    #                 self.dialog.add_frame(g_arr[t], s_arr[t])
+    #             else:
+    #                 # 2D data → only one frame, so add on t==0
+    #                 if t == 0:
+    #                     self.dialog.add_frame(g_arr, s_arr)
+    
+    #     # 5) force pages = T, with each page = len(files)
+    #     self.dialog.group_size = 1
+    #     # sync spinner to this
+    #     self.dialog.group_spin.blockSignals(True)
+    #     self.dialog.group_spin.setValue(1)
+    #     self.dialog.group_spin.setEnabled(len(self.dialog.frames) > 1)
+    #     self.dialog.group_spin.blockSignals(False)
+    
+    #     # 6) redraw
+    #     self.dialog.update_frame_navigation()
+    #     self.dialog.plot_current_group()
+ 
+    def replot_phasor(self):
+        """
+        Replot the phasor dialog by timepoint, aggregating all checked files.
+        Each frame shows ALL selected files' g/s data at that timepoint.
+        """
+        # 1) Clear old frames
+        self.dialog.frames = []
+    
         if not self.file_gs_data:
             print("No files selected for phasor plotting.")
             self.dialog.plot_universal_circle()
             return
     
-        
         files = list(self.file_gs_data.keys())
-        # pick the first file to infer T
+        # Pick the first file to infer T
         sample = self.file_gs_data[files[0]]
         data0 = (self.smoothed_gs_data[files[0]]
                  if self.median_filter_applied and files[0] in self.smoothed_gs_data
@@ -1556,61 +1571,55 @@ class PhasorWidget(QWidget):
         g0 = data0["g_image"]
         T = g0.shape[0] if g0.ndim == 3 else 1
     
-        
         for t in range(T):
+            g_list = []
+            s_list = []
             for fname in files:
                 raw = self.smoothed_gs_data[fname] if (self.median_filter_applied and fname in self.smoothed_gs_data) else self.file_gs_data[fname]
                 g_arr = raw["g_image"]
                 s_arr = raw["s_image"]
                 if g_arr.ndim == 3:
-                    self.dialog.add_frame(g_arr[t], s_arr[t])
+                    g_list.append(g_arr[t].flatten())
+                    s_list.append(s_arr[t].flatten())
                 else:
-                    # 2D data → only one frame, so add on t==0
-                    if t == 0:
-                        self.dialog.add_frame(g_arr, s_arr)
+                    g_list.append(g_arr.flatten())
+                    s_list.append(s_arr.flatten())
+            # Concatenate ALL files' points at this timepoint
+            g_concat = np.concatenate(g_list)
+            s_concat = np.concatenate(s_list)
+            self.dialog.add_frame(g_concat, s_concat)
     
-        # 5) force pages = T, with each page = len(files)
-        self.dialog.group_size = len(files)
-        # sync spinner to this
+        # Only one group per timepoint
+        self.dialog.group_size = 1
         self.dialog.group_spin.blockSignals(True)
-        self.dialog.group_spin.setValue(len(files))
+        self.dialog.group_spin.setValue(1)
+        self.dialog.group_spin.setEnabled(len(self.dialog.frames) > 1)
         self.dialog.group_spin.blockSignals(False)
     
-        # 6) redraw
+        # Redraw
         self.dialog.update_frame_navigation()
         self.dialog.plot_current_group()
-          
+              
 
 
+   
     def calculate_g_s_coordinates(self, image_data, laser_frequency, harmonic, zero_indices=None):
         """
         Calculate the G and S coordinates for phasor analysis using the channel assignments
         provided in the intro parameters.
-        
-        Expected intro parameters:
-          - "flim_type": "FD FLIM" or "TCSPC FLIM"
-          - "channel_assignments": a list of strings (e.g., 
-              ['Intensity', 'None', 'None', 'None', 'G-values', 'S-values'])
-        
-        For FD FLIM, we assume the data shape is [channels, height, width].
-        For TCSPC FLIM, we assume the data shape is [time, channels, height, width] and we take the first time point.
+    
+        Supports 2D, 3D, or 4D arrays for both FD FLIM and TCSPC FLIM types.
         """
-        # Retrieve channel mapping and FLIM type from intro parameters.
         channel_map = self.intro_params.get("channel_assignments", [])
         flim_type = self.intro_params.get("flim_type", "FD FLIM")
-        #print(flim_type)
         harmonic = self.intro_params.get("harmonic", 1)
-        #print(harmonic)
         laser_frequency = self.intro_params.get("laser_frequency", 0)
-        #print(laser_frequency)
-        
-        # Determine the index for the intensity channel.
         intensity_idx = channel_map.index("Intensity") if "Intensity" in channel_map else 0
-        
+    
         if flim_type == "FD FLIM":
-            # FD FLIM: assume data shape is [channels, height, width]
-            intensity = image_data[intensity_idx, :, :]
-            
+            # Always works for 2D/3D/4D:
+            intensity = extract_channel(image_data, intensity_idx)
+    
             # Determine phase and modulation indices.
             try:
                 phase_idx = channel_map.index("Phase-values")
@@ -1620,38 +1629,34 @@ class PhasorWidget(QWidget):
                 mod_idx = channel_map.index("Modulation-values")
             except ValueError:
                 mod_idx = 2  # fallback
-            
+    
             # Optionally, if harmonic==2, you might have alternate channels.
             if harmonic == 2:
                 try:
                     phase_idx = channel_map.index("Phase-values")
                 except ValueError:
-                    phase_idx = phase_idx  # leave as is
+                    pass  # already set
                 try:
                     mod_idx = channel_map.index("Modulation-values")
                 except ValueError:
-                    mod_idx = mod_idx  # leave as is
-            
-            phase_array = image_data[phase_idx, :, :].copy()
-            mod_array = image_data[mod_idx, :, :].copy()
-            
-            # Calculate G and S coordinates.
+                    pass  # already set
+    
+            phase_array = extract_channel(image_data, phase_idx)
+            mod_array = extract_channel(image_data, mod_idx)
+    
             g_image = mod_array * np.cos(np.pi / 180 * phase_array)
             s_image = mod_array * np.sin(np.pi / 180 * phase_array)
-            
+    
             self.original_g = g_image
             self.original_s = s_image
-            
+    
             if zero_indices is not None:
                 g_image[zero_indices] = 0
                 s_image[zero_indices] = 0
-                
-                
+    
         elif flim_type == "TCSPC FLIM":
-            # TCSPC FLIM: assume data shape is [time, channels, height, width]
-            intensity = image_data[:, intensity_idx, :, :]
-            
-            # For TCSPC, get the G and S channels based on mapping.
+            # Robust extraction for all dimensions:
+            intensity = extract_channel(image_data, intensity_idx)
             try:
                 g_idx = channel_map.index("G-values")
             except ValueError:
@@ -1660,29 +1665,23 @@ class PhasorWidget(QWidget):
                 s_idx = channel_map.index("S-values")
             except ValueError:
                 s_idx = 5  # default fallback
-            
-            # Extract G and S channels from all time points.
-            g_values = image_data[:, g_idx, :, :]
-            s_values = image_data[:, s_idx, :, :]
-            
-            # Scale the values.
+    
+            g_values = extract_channel(image_data, g_idx)
+            s_values = extract_channel(image_data, s_idx)
+    
             g_values_m = (g_values - 32767.5) / 32767.5
             s_values_m = (s_values - 32767.5) / 32767.5
-            
+    
             self.original_g = g_values_m
             self.original_s = s_values_m
-            
+    
             if zero_indices is not None:
                 g_values_m[zero_indices] = 0
                 s_values_m[zero_indices] = 0
-                
-            # For visualization, take the first time point.
+    
             g_image = g_values_m.copy()
             s_image = s_values_m.copy()
-            
-            #print("G image shape:", g_image.shape)
-            #print("S image shape:", s_image.shape)
-        
+    
         return intensity, g_image, s_image
     
     
@@ -1695,6 +1694,7 @@ class PhasorWidget(QWidget):
         """
         # Retrieve the laser frequency from the intro parameters (in MHz)
         laser_freq_mhz = self.intro_params.get("laser_frequency", 80.0)
+        print(laser_freq_mhz)
         # Convert to Hz and compute angular frequency.
         w = 2.0 * np.pi * (laser_freq_mhz * 1e6)
     

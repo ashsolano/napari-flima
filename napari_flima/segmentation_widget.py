@@ -599,19 +599,14 @@ def create_time_series_figures(df_wide, cursors=None):
     
     return figures
 
-
-
 def create_violin_figures(df_wide, cursors=None):
     """
     Create global violin plots (one per cursor) comparing the distribution of aggregated
     cursor values across groups, with statistical significance brackets showing p-values.
     
-    If all groups are "None", no statistical testing is performed.
-    If there are three or more groups (and not all "None"), a one-way ANOVA is performed.
-    Otherwise (exactly two groups), pairwise t-tests are used.
-    
-    The y-axis is dynamically computed based on the data, extended if necessary for bracket labels.
+    If a group has only one value, a bar is drawn instead of a violin.
     """
+
     if cursors is None:
         cursors = [col for col in df_wide.columns if col.startswith("Ratio_")]
     
@@ -652,33 +647,38 @@ def create_violin_figures(df_wide, cursors=None):
         p.y_range.start = y_start
         p.y_range.end = y_end
         
-        # Plot each group as a violin + box plot
+        # Plot each group as a violin + box plot or bar
         for g in groups:
             arr = df_avg.loc[df_avg["Group"] == g, cursor].dropna()
-            if len(arr) < 2:
-                continue
             x_center = x_mapping[g]
-            
-            # Box stats
+            if len(arr) == 1:
+                # Draw a bar for the single value group
+                y_val = arr.iloc[0]
+                bar_width = 0.18
+                p.vbar(x=x_center, top=y_val, width=bar_width, fill_color=color_map[g], line_color="black", alpha=0.8, legend_label=g)
+                # Optional: also mark with a dot for clarity
+                p.scatter(x=[x_center], y=[y_val], color="black", size=10)
+                continue
+            elif len(arr) < 2:
+                continue
+            # Violin + box plot
             q1 = np.percentile(arr, 25)
             q2 = np.median(arr)
             q3 = np.percentile(arr, 75)
             iqr = q3 - q1
-            
-            # Box whiskers
+
             lw_box = max(y_start, q1 - 1.5 * iqr)
             uw_box = min(y_end,   q3 + 1.5 * iqr)
-            
-            # Violin range
+
             lw_violin = max(y_start, q1 - 3.5 * iqr)
             uw_violin = min(y_end,   q3 + 3.5 * iqr)
-            
+
             ys = np.linspace(lw_violin, uw_violin, 100)
             kde = gaussian_kde(arr)
             density = kde(ys)
             scale = 0.4 / density.max()
             dens_scaled = density * scale
-            
+
             x_coords = np.concatenate([x_center - dens_scaled, x_center + dens_scaled[::-1]])
             y_coords = np.concatenate([ys, ys[::-1]])
             p.patch(
@@ -712,24 +712,20 @@ def create_violin_figures(df_wide, cursors=None):
             p.segment(x_center - 0.01, uw_box, x_center + 0.01, uw_box, line_color="black")
         
         # Statistical testing:
-        # If all groups are "None", skip testing.
         if groups and all(g == "None" for g in groups):
-            #print("All groups are 'None'; skipping statistical testing for", cursor)
             brackets = []
         else:
-            # If there are three or more groups, perform a one-way ANOVA;
-            # otherwise (exactly two groups), do a pairwise t-test.
-            if len(groups) >= 3:
+            # Only test when there are at least two groups with at least 2 values each
+            eligible = [g for g in groups if len(df_avg.loc[df_avg["Group"] == g, cursor].dropna()) >= 2]
+            if len(eligible) >= 3:
                 from scipy.stats import f_oneway
                 try:
-                    group_data = [df_avg.loc[df_avg["Group"] == g, cursor].dropna() for g in groups if len(df_avg.loc[df_avg["Group"] == g, cursor].dropna()) > 0]
+                    group_data = [df_avg.loc[df_avg["Group"] == g, cursor].dropna() for g in eligible]
                     if len(group_data) >= 3:
                         F_stat, p_val = f_oneway(*group_data)
-                        #print(f"ANOVA for {cursor}: F={F_stat:.3g}, p={p_val:.3g}")
                         if p_val < 0.05:
-                            # Draw one bracket spanning all groups.
-                            x_left = min(x_mapping.values())
-                            x_right = max(x_mapping.values())
+                            x_left = min([x_mapping[g] for g in eligible])
+                            x_right = max([x_mapping[g] for g in eligible])
                             brackets = [{
                                 "x_left": x_left,
                                 "x_right": x_right,
@@ -743,59 +739,50 @@ def create_violin_figures(df_wide, cursors=None):
                 except Exception as e:
                     print(f"ANOVA test error for {cursor}: {e}")
                     brackets = []
-            else:
+            elif len(eligible) == 2:
                 # Exactly two groups: use pairwise t-test.
-                offset = 0.05
+                g1, g2 = eligible
+                arr1 = df_avg.loc[df_avg["Group"] == g1, cursor].dropna()
+                arr2 = df_avg.loc[df_avg["Group"] == g2, cursor].dropna()
+                if len(arr1) >= 2 and len(arr2) >= 2:
+                    try:
+                        stat, p_val = ttest_ind(arr1, arr2)
+                    except Exception as e:
+                        print(f"Pairwise test error for {g1} vs {g2}: {e}")
+                        p_val = None
+                    if p_val is not None and p_val < 0.05:
+                        x_left = x_mapping[g1]
+                        x_right = x_mapping[g2]
+                        brackets = [{
+                            "x_left": x_left,
+                            "x_right": x_right,
+                            "level": 1,
+                            "p_val": p_val
+                        }]
+                    else:
+                        brackets = []
+                else:
+                    brackets = []
+            else:
                 brackets = []
-                for i in range(len(groups)):
-                    for j in range(i+1, len(groups)):
-                        g1 = groups[i]
-                        g2 = groups[j]
-                        arr1 = df_avg.loc[df_avg["Group"] == g1, cursor].dropna()
-                        arr2 = df_avg.loc[df_avg["Group"] == g2, cursor].dropna()
-                        if len(arr1) < 2 or len(arr2) < 2:
-                            continue
-                        try:
-                            stat, p_val = ttest_ind(arr1, arr2)
-                        except Exception as e:
-                            print(f"Pairwise test error for {g1} vs {g2}: {e}")
-                            continue
-                        if p_val < 0.05:
-                            x_left = x_mapping[g1]
-                            x_right = x_mapping[g2]
-                            level = 1
-                            for b in brackets:
-                                if not (x_right < b["x_left"] or x_left > b["x_right"]):
-                                    level = max(level, b["level"] + 1)
-                            brackets.append({
-                                "x_left": x_left,
-                                "x_right": x_right,
-                                "level": level,
-                                "p_val": p_val
-                            })
-        
+
         # Draw brackets if any.
         if brackets:
-            # Increase the y-range to accommodate the bracket labels.
             max_level = max(b["level"] for b in brackets)
             p.y_range.end += (max_level + 1) * 0.05
             for b in brackets:
                 y_bracket = p.y_range.start + (p.y_range.end - p.y_range.start) - b["level"] * 0.05
-                # Horizontal bracket line.
                 p.line([b["x_left"], b["x_right"]], [y_bracket, y_bracket],
                        line_width=1, line_color="black")
-                # Short vertical lines.
                 p.line([b["x_left"], b["x_left"]],
                        [y_bracket, y_bracket - 0.05/2],
                        line_width=1, line_color="black")
                 p.line([b["x_right"], b["x_right"]],
                        [y_bracket, y_bracket - 0.05/2],
                        line_width=1, line_color="black")
-                
-                # Label the bracket with the p-value.
                 bracket_label = Label(
                     x=(b["x_left"] + b["x_right"]) / 2,
-                    y=y_bracket + 0.05 * 0.15,   # slight offset above the line
+                    y=y_bracket + 0.05 * 0.15,
                     text=f"p={b['p_val']:.3g}",
                     text_font_size="10pt",
                     text_color="black",
@@ -803,21 +790,36 @@ def create_violin_figures(df_wide, cursors=None):
                     text_baseline="bottom"
                 )
                 p.add_layout(bracket_label)
-                #print(f"Bracket for {cursor}: Groups {b['x_left']} vs {b['x_right']} -> p={b['p_val']:.3g}")
         else:
             print(f"No significant differences (p < 0.05) for {cursor}.")
         
         p.legend.title = "Group"
         p.legend.location = "top_left"
+        num_groups_with_multiple = sum(len(df_avg.loc[df_avg["Group"] == g, cursor].dropna()) > 1 for g in groups)
+        num_groups_with_single = sum(len(df_avg.loc[df_avg["Group"] == g, cursor].dropna()) == 1 for g in groups)
+        if num_groups_with_multiple == 0 and num_groups_with_single > 0:
+            p.y_range.start = 0
+            p.y_range.end = 1
+
         figures.append(p)
     
     return figures
+
 
 
 def convert_fig_to_interactive(fig):
     #from bokeh.embed import components
     script, div = components(fig)
     return script + div
+
+# ------------------- export utility functions ---------
+
+def is_valid_segmentation(arr):
+    """Return True if the mask has at least two unique values (so, not all 0), and contains at least one nonzero pixel."""
+    if not isinstance(arr, np.ndarray) or arr.size == 0:
+        return False
+    labels = np.unique(arr)
+    return (len(labels) > 1) and np.any(arr != 0)
 
 
 # ------------------- EXPORT WIDGET -------------------
@@ -1102,8 +1104,19 @@ class ExportResultsWidget(QWidget):
         do_downstream = self.export_downstream_cb.isChecked() if hasattr(self, "export_downstream_cb") else False
         
         # Retrieve segmentation results from analysis_data.
-        segmentation_results = self.analysis_data.get("segmentation_results", {})
-        #print("Segmentation results keys:", list(segmentation_results.keys()))
+        # --- Filter segmentation_results ONCE ---
+        raw_segmentation_results = self.analysis_data.get("segmentation_results", {})
+        
+        def to_base_name(k):
+            return os.path.splitext(os.path.basename(k))[0]
+        
+        segmentation_results = {}
+        if do_downstream and raw_segmentation_results:
+            for k, v in raw_segmentation_results.items():
+                bname = to_base_name(k)
+                if is_valid_segmentation(v):
+                    segmentation_results[bname] = v
+        print("segmentation_results after filtering:", list(segmentation_results.keys()))
         
         # --- Export Images for Each File ---
         report_files = []
@@ -1117,22 +1130,49 @@ class ExportResultsWidget(QWidget):
             if self.export_intensity_cb.isChecked():
                 intensity = data.get("intensity")
                 if intensity is not None:
-                    T = intensity.shape[0]
-                    for t in range(T):
-                        out_path = os.path.join(file_output_dir, f"intensity_{t}.png")
-                        imageio.imwrite(out_path, intensity[t])
+                    # Handle both 2D and 3D intensity arrays robustly
+                    if intensity.ndim == 2:
+                        # Only one frame; save as t=0
+                        out_path = os.path.join(file_output_dir, "intensity_0.png")
+                        img = intensity
+                        imageio.imwrite(out_path, img)
+                    elif intensity.ndim == 3:
+                        T = intensity.shape[0]
+                        for t in range(T):
+                            img = np.squeeze(intensity[t])
+                            if img.ndim != 2:
+                                raise ValueError(f"Cannot save intensity image with shape {img.shape}; must be 2D.")
+                            out_path = os.path.join(file_output_dir, f"intensity_{t}.png")
+                            imageio.imwrite(out_path, img)
+                    else:
+                        print(f"Warning: Unexpected intensity shape {intensity.shape} for {file_name}. Skipping export.")
                 else:
                     print(f"No intensity data for {file_name}.")
-        
-            # Export lifetime (FLIM) images.
+
+
+            
             if self.export_flim_cb.isChecked():
                 lifetime_layer = lifetime_layers.get(file_name)
                 if lifetime_layer is not None:
-                    lifetime_data = lifetime_layer.data  # Expected shape: (T, 1, H, W)
-                    lifetime_data = np.squeeze(lifetime_data, axis=1)  # Now (T, H, W)
-                    T = lifetime_data.shape[0]
-                    for t in range(T):
-                        img = lifetime_data[t]
+                    lifetime_data = lifetime_layer.data  # Expected shape: (T, 1, H, W) or (H, W)
+                    # Squeeze singleton axes but keep at least 3D for multi-frame
+                    if lifetime_data.ndim == 2:
+                        # Only one frame, (H, W)
+                        imgs_to_save = [lifetime_data]
+                    elif lifetime_data.ndim == 3:
+                        # Already (T, H, W)
+                        imgs_to_save = [lifetime_data[t] for t in range(lifetime_data.shape[0])]
+                    elif lifetime_data.ndim == 4:
+                        # Squeeze the channel axis if present (T, 1, H, W)
+                        if lifetime_data.shape[1] == 1:
+                            lifetime_data = np.squeeze(lifetime_data, axis=1)  # Now (T, H, W)
+                            imgs_to_save = [lifetime_data[t] for t in range(lifetime_data.shape[0])]
+                        else:
+                            raise ValueError(f"Cannot handle FLIM lifetime array shape {lifetime_data.shape}")
+                    else:
+                        raise ValueError(f"Unexpected FLIM lifetime data shape {lifetime_data.shape}")
+            
+                    for t, img in enumerate(imgs_to_save):
                         valid = ~np.isnan(img)
                         if np.any(valid):
                             lower = np.nanpercentile(img[valid], 10)
@@ -1142,43 +1182,76 @@ class ExportResultsWidget(QWidget):
                         norm_img = (img - lower) / (upper - lower + 1e-8)
                         norm_img = np.clip(norm_img, 0, 1)
                         rgb_turbo = self.apply_turbo_colormap(norm_img, pmin=0, pmax=100)
+                        img_to_save = np.squeeze(rgb_turbo)
+                        if img_to_save.ndim not in (2, 3):
+                            raise ValueError(f"Cannot save FLIM image with shape {img_to_save.shape}; must be 2D or 3D (RGB).")
                         out_path = os.path.join(file_output_dir, f"lifetime_{t}.png")
-                        imageio.imwrite(out_path, rgb_turbo)
+                        imageio.imwrite(out_path, img_to_save)
                 else:
                     print(f"No lifetime layer for {file_name}.")
+
         
             # Export cursor mask images.
             if self.export_gs_cb.isChecked():
                 cursor_layer = cursor_mask_layers.get(file_name)
                 if cursor_layer is not None:
-                    cursor_data = cursor_layer.data  # Expected shape: (T, 1, H, W, 4)
-                    cursor_data = np.squeeze(cursor_data, axis=1)  # Now (T, H, W, 4)
-                    T = cursor_data.shape[0]
-                    for t in range(T):
-                        rgba = cursor_data[t]
+                    cursor_data = cursor_layer.data  # Expected shape: (T, 1, H, W, 4), (T, H, W, 4), (H, W, 4), etc.
+            
+                    # Handle all possible shapes robustly
+                    if cursor_data.ndim == 5 and cursor_data.shape[1] == 1:
+                        # Squeeze singleton channel: (T, 1, H, W, 4) -> (T, H, W, 4)
+                        cursor_data = np.squeeze(cursor_data, axis=1)
+            
+                    # Single-frame: (H, W, 4)
+                    if cursor_data.ndim == 3 and cursor_data.shape[-1] in (3, 4):
+                        masks_to_save = [cursor_data]
+                    # Multi-frame: (T, H, W, 4)
+                    elif cursor_data.ndim == 4 and cursor_data.shape[-1] in (3, 4):
+                        masks_to_save = [cursor_data[t] for t in range(cursor_data.shape[0])]
+                    else:
+                        raise ValueError(f"Unexpected cursor mask shape {cursor_data.shape}")
+            
+                    for t, rgba in enumerate(masks_to_save):
                         composited = self.composite_on_black(rgba)
+                        img = np.squeeze(composited)
+                        if img.ndim not in (2, 3):
+                            raise ValueError(f"Cannot save mask image with shape {img.shape}; must be 2D or 3D (RGB/RGBA).")
                         out_path = os.path.join(file_output_dir, f"mask_{t}.png")
-                        imageio.imwrite(out_path, composited)
+                        imageio.imwrite(out_path, img)
                 else:
                     print(f"No cursor mask layer for {file_name}.")
+
+          
         
             # --- Export Segmentation Images if Downstream is Enabled ---
-            if do_downstream and file_name in segmentation_results:
-                seg_masks = segmentation_results[file_name]  # Expected shape: (T, H, W)
-                T = seg_masks.shape[0]
-                # #from skimage.color import label2rgb
-                # print(f"For {file_name}: Segmentation shape: {seg_masks.shape}, Unique labels: {np.unique(seg_masks)}")
-                for t in range(T):
-                    seg_image = label2rgb(seg_masks[t], bg_label=0)
+
+            seg_masks = segmentation_results.get(base_name, None)
+            has_valid_segmentation = do_downstream and is_valid_segmentation(seg_masks)
+            
+            if has_valid_segmentation:
+                if seg_masks.ndim == 2:
+                    masks_to_save = [seg_masks]
+                elif seg_masks.ndim == 3:
+                    masks_to_save = [seg_masks[t] for t in range(seg_masks.shape[0])]
+                else:
+                    raise ValueError(f"Unexpected segmentation mask shape {seg_masks.shape}")
+                for t, mask in enumerate(masks_to_save):
+                    seg_image = label2rgb(mask, bg_label=0)
+                    img = np.squeeze((seg_image * 255).astype(np.uint8))
+                    if img.ndim not in (2, 3):
+                        raise ValueError(f"Cannot save segmentation image with shape {img.shape}; must be 2D or 3D (RGB).")
                     out_path = os.path.join(file_output_dir, f"segmentation_{t}.png")
-                    imageio.imwrite(out_path, (seg_image * 255).astype(np.uint8))
-        
-            # Record the number of frames for the report.
+                    imageio.imwrite(out_path, img)
+            else:
+                print(f"No valid segmentation for {base_name} -- skipping segmentation export.")
+
+    
             intensity_data = data.get("intensity")
             num_frames = intensity_data.shape[0] if intensity_data is not None else 0
             report_files.append({
                 "name": base_name,
-                "num_frames": num_frames
+                "num_frames": num_frames,
+                "has_segmentation": has_valid_segmentation,
             })
         
         # --- Save Phasor Plot Frames ---
@@ -1216,13 +1289,7 @@ class ExportResultsWidget(QWidget):
         self.analysis_data["plot_summary"] = interactive_plots
         
         
-        # # Debug: Print a preview of the interactive plots
-        # for key, plot_dict in interactive_plots.items():
-        #     print(f"Interactive plot for {key} - Time Trend:")
-        #     print(plot_dict["time_trend"][:500])  # Slicing the string
-        #     print(f"Interactive plot for {key} - Global Violin:")
-        #     print(plot_dict["global_violin"][:500])
-        
+    
         
         # --- Build Report Data ---
         report_data = {
@@ -1235,8 +1302,7 @@ class ExportResultsWidget(QWidget):
             "downstream_table": downstream_table,
             "plot_summary": self.analysis_data.get("plot_summary", {})
         }
-        #print("Report Data - Cursor Settings:")
-        #print(report_data.get("cursors"))
+        
         
         # --- Build HTML Report ---
         # NOTE: The cursor information table has been restored below in the phasor distribution section.
@@ -1539,25 +1605,23 @@ class ExportResultsWidget(QWidget):
             <div class="section" id="downstream_analysis">
               <h2>Downstream Analysis</h2>
               <p>This section displays the segmentation images and the pivoted analysis DataFrame below.</p>
-        
               {% for file in files %}
-              <div class="subsection" id="downstream_{{ file.name }}">
-                <h3>{{ file.name }}</h3>
-        
-                <div class="segmentation-row">
-                  <img id="segmentation_{{ file.name }}" src="{{ file.name }}/segmentation_0.png" alt="Segmentation">
+                {% if file.has_segmentation %}
+                <div class="subsection" id="downstream_{{ file.name }}">
+                  <h3>{{ file.name }}</h3>
+                  <div class="segmentation-row">
+                    <img id="segmentation_{{ file.name }}" src="{{ file.name }}/segmentation_0.png" alt="Segmentation">
+                  </div>
+                  <div class="frame-controls">
+                    Frame:
+                    <input id="downstream_slider_{{ file.name }}" type="range" min="0" max="{{ file.num_frames - 1 }}" value="0"
+                           onchange="updateDownstreamFrame('{{ file.name }}', {{ file.num_frames }}, 'downstream_slider_{{ file.name }}', 'downstream_number_{{ file.name }}')">
+                    <input id="downstream_number_{{ file.name }}" type="number" min="0" max="{{ file.num_frames - 1 }}" value="0"
+                           onchange="setDownstreamFrameFromNumber('{{ file.name }}', {{ file.num_frames }}, 'downstream_slider_{{ file.name }}', 'downstream_number_{{ file.name }}')">
+                  </div>
                 </div>
-        
-                <div class="frame-controls">
-                  Frame:
-                  <input id="downstream_slider_{{ file.name }}" type="range" min="0" max="{{ file.num_frames - 1 }}" value="0"
-                         onchange="updateDownstreamFrame('{{ file.name }}', {{ file.num_frames }}, 'downstream_slider_{{ file.name }}', 'downstream_number_{{ file.name }}')">
-                  <input id="downstream_number_{{ file.name }}" type="number" min="0" max="{{ file.num_frames - 1 }}" value="0"
-                         onchange="setDownstreamFrameFromNumber('{{ file.name }}', {{ file.num_frames }}, 'downstream_slider_{{ file.name }}', 'downstream_number_{{ file.name }}')">
-                </div>
-              </div>
+                {% endif %}
               {% endfor %}
-        
               {% if downstream_table %}
               <h3>Analysis Results</h3>
               <div class="analysis-table-container" style="overflow-x:auto; max-height:400px; overflow-y:auto;">
@@ -1566,6 +1630,7 @@ class ExportResultsWidget(QWidget):
               {% endif %}
             </div>
             {% endif %}
+
         
             <!-- New: Interactive Plot Summaries Section -->
             <div class="section" id="interactive_plots">
