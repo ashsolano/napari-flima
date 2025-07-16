@@ -131,10 +131,12 @@ class FLIMDialog(QDialog):
         v.addWidget(QLabel("For each channel, select the corresponding data:", alignment=Qt.AlignLeft))
         self.spin_nch = QSpinBox(); self.spin_nch.setRange(1,10)
         self.spin_nch.setFont(self.default_font)
-        self.spin_nch.valueChanged.connect(self._update_channels)
+        
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        
+        self.spin_nch.valueChanged.connect(lambda n: self._update_channels(n, scroll))
         v.addWidget(self.spin_nch)
 
-        scroll = QScrollArea(); scroll.setWidgetResizable(True)
         cont = QWidget(); self.ch_layout = QVBoxLayout(cont)
         scroll.setWidget(cont)
         v.addWidget(scroll)
@@ -145,10 +147,10 @@ class FLIMDialog(QDialog):
         v.addWidget(self.chk_gs)
 
         gb.setLayout(v)
-        self._update_channels(self.spin_nch.value())
+        self._update_channels(self.spin_nch.value(), scroll)
         return gb
 
-    def _update_channels(self, n):
+    def _update_channels(self, n, scroll):
         clear_layout(self.ch_layout)
         self.channel_combos = []
         for i in range(n):
@@ -163,6 +165,7 @@ class FLIMDialog(QDialog):
             h.addWidget(lbl); h.addWidget(combo); h.addStretch()
             self.ch_layout.addLayout(h)
             self.channel_combos.append(combo)
+        scroll.setMinimumHeight(min(50*n, 200))
 
     def _confirm(self):
         params = self.get_parameters()

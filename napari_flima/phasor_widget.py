@@ -10,7 +10,7 @@ from napari.utils.colormaps import Colormap
 from qtpy.QtCore import Qt, Signal, QRect
 from qtpy.QtGui import (
     QClipboard, QPixmap, QColor, QStandardItem, QStandardItemModel,
-    QPainter, QFont, QBrush, QIcon, QDoubleValidator
+    QPainter, QFont, QBrush, QIcon, QDoubleValidator, QIntValidator
 )
 from qtpy.QtWidgets import (
     QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
@@ -494,6 +494,7 @@ class FileSelectionTable(QGroupBox):
 
         # 2) File name label
         file_label = QLabel(file_name)
+        file_label.setToolTip(file_name)
         file_label.setFont(self.default_font)
         file_label.setStyleSheet("color: #f8f8f2;")
         file_label.setFixedWidth(100)  # fixed for alignment
@@ -533,9 +534,14 @@ class FileSelectionTable(QGroupBox):
         slider.setMaximum(max_intensity)
         slider.setValue(0)
 
-        val_label = QLabel("0")
+        val_label = QLineEdit()
+        val_label.setValidator(QIntValidator())
         val_label.setFixedWidth(30)
         val_label.setAlignment(Qt.AlignCenter)
+        val_label.setText("0")
+
+        val_label.textEdited.connect(lambda val, fn=file_name: self.threshold_changed.emit(fn, int('0'+val)))
+        val_label.editingFinished.connect(lambda fn=file_name: self.parent_widget.slider_released(fn))
 
         slider.valueChanged.connect(lambda val, fn=file_name: self.threshold_changed.emit(fn, val))
         slider.valueChanged.connect(lambda val: val_label.setText(str(val)))
@@ -558,6 +564,8 @@ class FileSelectionTable(QGroupBox):
             "val_label": val_label,
             "layer_data": layer_data
         }
+        # Automatically expand and reduce size of File Selection Box to adapt to number of files
+        self.scroll_area.setMinimumHeight(min(len(self.file_rows)*50, 200))
 
     def remove_file(self, file_path):
         """
@@ -589,6 +597,9 @@ class FileSelectionTable(QGroupBox):
                         row_layout.deleteLater()
                         break
         del self.file_rows[file_name]
+
+        # Automatically expand and reduce size of File Selection Box to adapt to number of files
+        self.scroll_area.setMinimumHeight(min(len(self.file_rows)*50, 200))
 
     def on_checkbox_state_changed(self, state, file_name):
         """If your main widget has on_checkbox_state_changed, call it."""
