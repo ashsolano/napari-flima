@@ -157,7 +157,7 @@ class CursorAnalysisWidget(QGroupBox):
       - Numeric columns for R, G, S, τₘ, τₚ
       - A fixed-width "Remove" column with an ✕ button to delete the row
     """
-    def __init__(self, parent=None, title="Cursor Analysis", font=None):
+    def __init__(self, parent=None, title="🛈&Cursor Analysis", font=None):
         super().__init__(title, parent)
         self.default_font = font or QFont("Arial", 12)
         self.setFont(self.default_font)
@@ -228,7 +228,7 @@ class CursorAnalysisWidget(QGroupBox):
         layout.addLayout(btn_layout)
 
         self.cursor_rows_data = []
-        
+
     def eventFilter(self, source, event):
         if source == self and event.type() == QEvent.ToolTip:
             options = QStyleOptionGroupBox()
@@ -374,7 +374,7 @@ class FileSelectionTable(QGroupBox):
     threshold_changed = Signal(str, object)  # (file_name, (threshold_value_lower, threshold_value_upper))
     groups_updated = Signal(list)  # Signal to emit updated group list
 
-    def __init__(self, parent=None, title="&File Selection", font=None):
+    def __init__(self, parent=None, title="🛈&File Selection", font=None):
         super().__init__(title, parent)
         self.parent_widget = parent
         self.default_font = font if font else QFont("Arial", 12)
@@ -561,11 +561,21 @@ class FileSelectionTable(QGroupBox):
         threshold_widget.setLayout(threshold_layout)
         threshold_widget.setFixedWidth(200)  # ensure alignment across rows
 
+        QSS = """
+            QRangeSlider::handle:horizontal {
+                background: #007acc;
+                width: 4px;
+                height: 24px;
+                margin: -12px 0px;
+            }
+        """
+
         slider = sqt.QRangeSlider(Qt.Horizontal)
         max_intensity = int(np.max(layer_data))
         slider.setMinimum(0)
         slider.setMaximum(max_intensity)
         slider.setValue((0, max_intensity))
+        slider.setStyleSheet(QSS)
 
         val_low_label = QLineEdit()
         val_low_label.setValidator(QIntValidator())
@@ -790,7 +800,7 @@ class PhasorPlotDialog(QDialog):
     """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Phasor Distribution")
+        self.setWindowTitle("🛈&Phasor Distribution")
 
       
         self.setStyleSheet("""
@@ -1255,14 +1265,14 @@ class PhasorWidget(QWidget):
         
         
         # --- File Selection Section ---
-        self.file_selection_widget = FileSelectionTable(self, title="&File Selection")
+        self.file_selection_widget = FileSelectionTable(self, title="🛈&File Selection")
         self.file_selection_widget.threshold_changed.connect(self.update_threshold)
         layout.addWidget(self.file_selection_widget)
         
     
         
         # --- Cursor Analysis Section ---
-        self.cursor_analysis_widget = CursorAnalysisWidget(self, title="Cursor Analysis", font=self.font())
+        self.cursor_analysis_widget = CursorAnalysisWidget(self, title="🛈&Cursor Analysis", font=self.font())
         layout.addWidget(self.cursor_analysis_widget)
         
 
