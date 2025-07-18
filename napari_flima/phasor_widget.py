@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import superqt as sqt
 import matplotlib
 import matplotlib.pyplot as plt
 from math import ceil
@@ -7,7 +8,7 @@ from scipy import signal
 from matplotlib.colors import CSS4_COLORS
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from napari.utils.colormaps import Colormap
-from qtpy.QtCore import Qt, Signal, QRect
+from qtpy.QtCore import Qt, Signal, QRect, QEvent
 from qtpy.QtGui import (
     QClipboard, QPixmap, QColor, QStandardItem, QStandardItemModel,
     QPainter, QFont, QBrush, QIcon, QDoubleValidator, QIntValidator
@@ -15,9 +16,9 @@ from qtpy.QtGui import (
 from qtpy.QtWidgets import (
     QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
     QLineEdit, QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox, QStyledItemDelegate,
-    QStyle, QStyleOptionComboBox, QScrollArea, QSizePolicy, QGroupBox, QLabel,
+    QStyle, QStyleOptionComboBox, QStyleOptionGroupBox, QScrollArea, QSizePolicy, QGroupBox, QLabel,
     QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QFormLayout,
-    QGridLayout, QFileDialog, QSlider
+    QGridLayout, QFileDialog, QSlider, QToolTip
 )
 from qtpy.QtCore import QTimer
 from functools import partial
@@ -160,6 +161,9 @@ class CursorAnalysisWidget(QGroupBox):
         super().__init__(title, parent)
         self.default_font = font or QFont("Arial", 12)
         self.setFont(self.default_font)
+        self._title_tooltip = "sample tooltip"
+        self.installEventFilter(self)
+
         self.setStyleSheet("""
             QGroupBox {
                 border: 1px solid #707070;
@@ -224,6 +228,21 @@ class CursorAnalysisWidget(QGroupBox):
         layout.addLayout(btn_layout)
 
         self.cursor_rows_data = []
+        
+    def eventFilter(self, source, event):
+        if source == self and event.type() == QEvent.ToolTip:
+            options = QStyleOptionGroupBox()
+            control = self.style().hitTestComplexControl(
+                QStyle.CC_GroupBox, options, event.pos()
+            )
+            if control == QStyle.SC_GroupBoxLabel or control == QStyle.SC_GroupBoxCheckBox:
+                QToolTip.showText(event.globalPos(), self._title_tooltip)
+                return True
+            else:
+                QToolTip.hideText()
+                return True
+            
+        return super().eventFilter(source, event)
 
     def add_cursor_row(self):
         """Insert a new row with Active, Color, R, G, S, τₘ, τₚ, and Remove."""
@@ -352,14 +371,16 @@ class FileSelectionTable(QGroupBox):
     - Minimal spacing to reduce vertical space.
     """
 
-    threshold_changed = Signal(str, int)  # (file_name, threshold_value)
+    threshold_changed = Signal(str, object)  # (file_name, (threshold_value_lower, threshold_value_upper))
     groups_updated = Signal(list)  # Signal to emit updated group list
 
-    def __init__(self, parent=None, title="File Selection", font=None):
+    def __init__(self, parent=None, title="&File Selection", font=None):
         super().__init__(title, parent)
         self.parent_widget = parent
         self.default_font = font if font else QFont("Arial", 12)
         self.setFont(self.default_font)
+        self._title_tooltip = "sample tooltip"
+        self.installEventFilter(self)
 
         # Style it like the channel config
         self.setStyleSheet("""
@@ -438,9 +459,21 @@ class FileSelectionTable(QGroupBox):
         main_layout.addWidget(self.scroll_area)
 
         main_layout.addStretch()
-
-   
-   
+    
+    def eventFilter(self, source, event):
+        if source == self and event.type() == QEvent.ToolTip:
+            options = QStyleOptionGroupBox()
+            control = self.style().hitTestComplexControl(
+                QStyle.CC_GroupBox, options, event.pos()
+            )
+            if control == QStyle.SC_GroupBoxLabel or control == QStyle.SC_GroupBoxCheckBox:
+                QToolTip.showText(event.globalPos(), self._title_tooltip)
+                return True
+            else:
+                QToolTip.hideText()
+                return True
+            
+        return super().eventFilter(source, event)
     
     def on_add_group(self):
         new_group = self.group_line_edit.text().strip()
@@ -528,28 +561,42 @@ class FileSelectionTable(QGroupBox):
         threshold_widget.setLayout(threshold_layout)
         threshold_widget.setFixedWidth(200)  # ensure alignment across rows
 
-        slider = QSlider(Qt.Horizontal)
+        slider = sqt.QRangeSlider(Qt.Horizontal)
         max_intensity = int(np.max(layer_data))
         slider.setMinimum(0)
         slider.setMaximum(max_intensity)
-        slider.setValue(0)
+        slider.setValue((0, max_intensity))
 
-        val_label = QLineEdit()
-        val_label.setValidator(QIntValidator())
-        val_label.setFixedWidth(30)
-        val_label.setAlignment(Qt.AlignCenter)
-        val_label.setText("0")
+        val_low_label = QLineEdit()
+        val_low_label.setValidator(QIntValidator())
+        val_low_label.setFixedWidth(50)
+        val_low_label.setAlignment(Qt.AlignCenter)
+        val_low_label.setText("0")
 
-        val_label.textEdited.connect(lambda val, fn=file_name: self.threshold_changed.emit(fn, int('0'+val)))
-        val_label.editingFinished.connect(lambda fn=file_name: self.parent_widget.slider_released(fn))
+        
+        val_high_label = QLineEdit()
+        val_high_label.setValidator(QIntValidator())
+        val_high_label.setFixedWidth(50)
+        val_high_label.setAlignment(Qt.AlignCenter)
+        val_high_label.setText(str(max_intensity))
+
+        val_low_label.textEdited.connect(lambda val_low, val_high=int(val_high_label.text()), fn=file_name: self.threshold_changed.emit(fn, (int('0'+val_low), val_high)))
+        val_low_label.textEdited.connect(lambda val_low, val_high=val_high_label.text(): slider.setSliderPosition((int('0'+val_low), int(val_high))))
+        val_low_label.editingFinished.connect(lambda fn=file_name: self.parent_widget.slider_released(fn))
+
+        val_high_label.textEdited.connect(lambda val_high, val_low=int(val_low_label.text()), fn=file_name: self.threshold_changed.emit(fn, (val_low, int('0'+val_high))))
+        val_high_label.textEdited.connect(lambda val_high, val_low=val_low_label.text(): slider.setSliderPosition((int(val_low), int('0'+val_high))))
+        val_high_label.editingFinished.connect(lambda fn=file_name: self.parent_widget.slider_released(fn))
 
         slider.valueChanged.connect(lambda val, fn=file_name: self.threshold_changed.emit(fn, val))
-        slider.valueChanged.connect(lambda val: val_label.setText(str(val)))
+        slider.valueChanged.connect(lambda val: val_low_label.setText(str(val[0])))
+        slider.valueChanged.connect(lambda val: val_high_label.setText(str(val[1])))
         slider.sliderReleased.connect(lambda fn=file_name: self.parent_widget.slider_released(fn))
 
 
         threshold_layout.addWidget(slider)
-        threshold_layout.addWidget(val_label)
+        threshold_layout.addWidget(val_low_label)
+        threshold_layout.addWidget(val_high_label)
         row_layout.addWidget(threshold_widget)
 
         # Add row_layout to the files_layout
@@ -561,7 +608,8 @@ class FileSelectionTable(QGroupBox):
             "file_label": file_label,
             "group_combo": group_combo,
             "slider": slider,
-            "val_label": val_label,
+            "val_low_label": val_low_label,
+            "val_high_label": val_high_label,
             "layer_data": layer_data
         }
         # Automatically expand and reduce size of File Selection Box to adapt to number of files
@@ -1207,7 +1255,7 @@ class PhasorWidget(QWidget):
         
         
         # --- File Selection Section ---
-        self.file_selection_widget = FileSelectionTable(self, title="File Selection")
+        self.file_selection_widget = FileSelectionTable(self, title="&File Selection")
         self.file_selection_widget.threshold_changed.connect(self.update_threshold)
         layout.addWidget(self.file_selection_widget)
         
@@ -1274,11 +1322,11 @@ class PhasorWidget(QWidget):
             self.file_selection_widget.remove_file(file_path)
 
     def update_threshold(self, file_name, threshold_value):
-        self.update_image_layer(file_name, threshold_value)
+        self.update_image_layer(file_name, threshold_value[0], threshold_value[1])
     
     
             
-    def update_image_layer(self, file_name, threshold):
+    def update_image_layer(self, file_name, threshold_lower, threshold_upper):
         channel_map = self.intro_params.get("channel_assignments", [])
         intensity_idx = channel_map.index("Intensity") if "Intensity" in channel_map else 0
         image_layer = None
@@ -1300,10 +1348,14 @@ class PhasorWidget(QWidget):
         # --- Universal thresholding logic ---
         intensity_image = extract_channel(original_data, intensity_idx)
         if intensity_image.ndim == 3:
-            mask = intensity_image < threshold
+            mask_lower = intensity_image < threshold_lower
+            mask_upper = intensity_image > threshold_upper
+            mask = np.logical_or(mask_lower, mask_upper)
             mask0 = mask[0]
         else:
-            mask = intensity_image < threshold
+            mask_lower = intensity_image < threshold_lower
+            mask_upper = intensity_image > threshold_upper
+            mask = np.logical_or(mask_lower, mask_upper)
             mask0 = mask
         if not checkbox_checked:
             rgba_mask = np.zeros(mask0.shape + (4,), dtype=np.uint8)
