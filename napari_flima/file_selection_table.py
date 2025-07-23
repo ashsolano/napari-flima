@@ -22,6 +22,7 @@ from qtpy.QtWidgets import (
 from qtpy.QtCore import QTimer
 from functools import partial
 
+from .group_assignment_dialog import GroupAssignmentWindow
 
 import imageio
 
@@ -154,6 +155,11 @@ class FileSelectionTable(QGroupBox):
                 #print("Updated analysis_data group_list:", self.analysis_data["group_list"])
             # Emit the signal with the updated list.
             self.groups_updated.emit(self.known_groups)
+            current_group_mapping = self.get_file_group_mapping()
+            group_assignment_dialog = GroupAssignmentWindow(current_group_mapping, new_group)
+            if group_assignment_dialog.exec_() == QDialog.Accepted:
+                for f in group_assignment_dialog.get_group_assignments():
+                    self._set_file_group(f, new_group)
         self.group_line_edit.clear()
 
         
@@ -343,3 +349,6 @@ class FileSelectionTable(QGroupBox):
             # Assume each row_info has a "group_combo" widget.
             mapping[file_name] = row_info["group_combo"].currentText()
         return mapping
+    
+    def _set_file_group(self, file_name, group):
+        self.file_rows[file_name]["group_combo"].setText(group)
