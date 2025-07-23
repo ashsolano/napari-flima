@@ -7,7 +7,8 @@ from qtpy.QtGui  import QPixmap
 from qtpy.QtCore import Qt
 
 from napari_flima.intro_dialog_widget import FLIMDialog
-from napari_flima.phasor_widget       import PhasorWidget, PhasorPlotDialog
+from napari_flima.phasor_widget       import PhasorWidget
+from napari_flima.phasor_plot import PhasorPlotDialog
 from napari_flima.segmentation_widget import MainSegmentationWidget
 from napari_flima import get_logo_path
 

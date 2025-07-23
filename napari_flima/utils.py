@@ -261,3 +261,27 @@ class ColorSelectorApp(QComboBox):
 
     def selectedColorName(self):
         return self.currentText()
+    
+class NumericDelegate(QStyledItemDelegate):
+    """A delegate that provides a narrow QLineEdit with a double validator for numeric columns."""
+    def createEditor(self, parent, option, index):
+        line_edit = QLineEdit(parent)
+        # Accept up to 3 decimals, range [0.0 .. 999.999] (adjust as needed)
+        validator = QDoubleValidator(0.0, 999.999, 3, parent)
+        validator.setNotation(QDoubleValidator.StandardNotation)
+        line_edit.setValidator(validator)
+        line_edit.setAlignment(Qt.AlignCenter)
+        # You can set a small fixed width if you like, or let the table column handle it
+        return line_edit
+
+    def setEditorData(self, editor, index):
+        # The cell's data is a string or numeric
+        text_value = index.model().data(index, Qt.EditRole)
+        if text_value is None:
+            text_value = "0.0"
+        editor.setText(str(text_value))
+
+    def setModelData(self, editor, model, index):
+        # Commit the edited text back to the model
+        text_value = editor.text()
+        model.setData(index, text_value, Qt.EditRole)
