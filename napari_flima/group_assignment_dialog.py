@@ -27,9 +27,25 @@ class GroupAssignmentWindow(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Group Assignment")
 
-        self.setStyleSheet("""
+        QSS = ("""
             QDialog {
                 background-color: #282a36;
+                color: #f8f8f2;
+            }
+            QGroupBox {
+                border: 1px solid #707070;
+                background-color: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #282a36, stop:1 #33353b
+                );
+                margin-top: 10px;
+                padding: 5px;
+                border-radius: 5px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
                 color: #f8f8f2;
             }
             QLabel {
@@ -38,11 +54,23 @@ class GroupAssignmentWindow(QDialog):
             QSpinBox {
                  min-width: 35px;
             }
-
+            QPushButton {
+                background-color: #007acc;
+                color: white;
+                border-radius: 4px;
+                padding: 4px 10px;
+            }
+            QPushButton:hover {
+                background-color: #005f99;
+            }
         """)
+        self.setStyleSheet(QSS)
+
         self.files_to_add = []
         self.setFont(QFont("Arial", 10))
         self.file_check_buttons = QVBoxLayout(self)
+        self.file_check_buttons.setSpacing(8)
+        self.file_check_buttons.setContentsMargins(5, 5, 5, 5)
         self.file_check_buttons.addWidget(QLabel(f"Select files to add to group {group}:"))
         for file in file_group_mapping.keys():
             h = QHBoxLayout()
@@ -60,9 +88,11 @@ class GroupAssignmentWindow(QDialog):
 
     def save_groups(self):
         self.files_to_add = []
-        for row in [self.file_check_buttons.itemAt(i) for i in range(0, self.file_check_buttons.count())]:
-            if row.check.isChecked():
-                self.files_to_add.append(row.file_name.getText())
+        for row in [self.file_check_buttons.itemAt(i).layout() for i in range(1, self.file_check_buttons.count()-1)]:
+            check_box = row.itemAt(0).widget()
+            label = row.itemAt(1).widget()
+            if (check_box.isChecked()):
+                self.files_to_add.append(label.text())
         self.accept()
     
     def get_group_assignments(self):

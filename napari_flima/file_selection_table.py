@@ -104,6 +104,7 @@ class FileSelectionTable(QGroupBox):
             }
         """)
         add_group_btn.clicked.connect(self.on_add_group)
+        self.group_line_edit.editingFinished.connect(self.on_add_group)
 
         group_row.addWidget(group_label)
         group_row.addWidget(self.group_line_edit)
@@ -351,4 +352,4 @@ class FileSelectionTable(QGroupBox):
         return mapping
     
     def _set_file_group(self, file_name, group):
-        self.file_rows[file_name]["group_combo"].setText(group)
+        self.file_rows[file_name]["group_combo"].setCurrentIndex(self.known_groups.index(group))
