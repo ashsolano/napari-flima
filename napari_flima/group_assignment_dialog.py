@@ -1,26 +1,7 @@
-import os
-import numpy as np
-import superqt as sqt
-import matplotlib
-import matplotlib.pyplot as plt
-from math import ceil
-from scipy import signal
-from matplotlib.colors import CSS4_COLORS
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from napari.utils.colormaps import Colormap
-from qtpy.QtCore import Qt, Signal, QRect, QEvent
-from qtpy.QtGui import (
-    QClipboard, QPixmap, QColor, QStandardItem, QStandardItemModel,
-    QPainter, QFont, QBrush, QIcon, QDoubleValidator, QIntValidator
-)
+from qtpy.QtGui import QFont
 from qtpy.QtWidgets import (
-    QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLineEdit, QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox, QStyledItemDelegate,
-    QStyle, QStyleOptionComboBox, QStyleOptionGroupBox, QScrollArea, QSizePolicy, QGroupBox, QLabel,
-    QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QFormLayout,
-    QGridLayout, QFileDialog, QSlider, QToolTip
+    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QCheckBox, QLabel
 )
-from qtpy.QtCore import QTimer
 
 class GroupAssignmentWindow(QDialog):
     def __init__(self, file_group_mapping, group, parent=None):

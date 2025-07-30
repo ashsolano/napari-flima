@@ -86,6 +86,11 @@ class PlotCanvas(FigureCanvas):
         # after adding, do a full redraw & recache background:
         self.draw()
         self.background = self.copy_from_bbox(self.ax.bbox)
+    
+    def update_draggable_cursor_pos(self, idx, x, y):
+        self.draggable_cursors[idx].center = x, y
+        self.draw()
+        self.background = self.copy_from_bbox(self.ax.bbox)
 
     def remove_draggable_cursor(self, idx):
         if 0 <= idx < len(self.draggable_cursors):

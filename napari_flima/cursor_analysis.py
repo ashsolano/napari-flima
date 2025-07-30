@@ -42,6 +42,7 @@ class CursorAnalysisWidget(QGroupBox):
     """
     def __init__(self, parent=None, title="🛈 &Cursor Analysis", font=None):
         super().__init__(title, parent)
+        self._phasorwidget_ptr = parent
         self.default_font = font or QFont("Arial", 12)
         self.setFont(self.default_font)
         self._title_tooltip = "sample tooltip"
@@ -82,6 +83,7 @@ class CursorAnalysisWidget(QGroupBox):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(7, QHeaderView.Fixed)
         self.table.setColumnWidth(7, 24)
+        self.table.itemChanged.connect(self._update_cursor_position)
 
         # Optionally set reasonable widths for other columns
         widths = [50, 60, 40, 40, 40, 50, 50]
@@ -129,6 +131,8 @@ class CursorAnalysisWidget(QGroupBox):
 
     def add_cursor_row(self):
         """Insert a new row with Active, Color, R, G, S, τₘ, τₚ, and Remove."""
+        self.table.blockSignals(True)
+        #QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         row = self.table.rowCount()
         self.table.insertRow(row)
         row_data = {}
@@ -185,6 +189,16 @@ class CursorAnalysisWidget(QGroupBox):
         row_data["remove_btn"] = remove_btn
 
         self.cursor_rows_data.append(row_data)
+        self.table.blockSignals(False)
+        #QApplication.restoreOverrideCursor()
+    
+    def _update_cursor_position(self, item):
+        row = item.row()
+        x = float(self.cursor_rows_data[row]["col_3"].text())
+        y = float(self.cursor_rows_data[row]["col_4"].text())
+        self.table.blockSignals(True)
+        self._phasorwidget_ptr.update_g_s_values(row, x, y)
+        self.table.blockSignals(False)
 
     def _remove_cursor_row(self, row):
         """Remove the row and any associated cursor patch."""
