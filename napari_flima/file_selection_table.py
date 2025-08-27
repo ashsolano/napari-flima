@@ -127,7 +127,27 @@ class FileSelectionTable(QGroupBox):
         self.scroll_area.setWidget(self.files_container)
         main_layout.addWidget(self.scroll_area)
 
+        # (D) Select all files in group
+        self.group_select = QHBoxLayout()
+        add_to_phasor_button = QPushButton("Add Group to Phasor Plot")
+        group_select_combo = QComboBox()
+        group_select_combo.setFont(self.default_font)
+        group_select_combo.setEditable(False)
+        group_select_combo.addItems(self.known_groups)
+        group_select_combo.setFixedWidth(100)  # align combos
+        add_to_phasor_button.clicked.connect(self.add_group_to_phasor)
+        self.group_select.addWidget(add_to_phasor_button)
+        self.group_select.addWidget(group_select_combo)
+        main_layout.addLayout(self.group_select)
+
         main_layout.addStretch()
+
+    def add_group_to_phasor(self):
+        selected_group = self.group_select.layout().itemAt(1).widget().currentText()
+        print(f"group selected to add: {selected_group}")
+        for file_name in [file for file, group in self.get_file_group_mapping().items() if group == selected_group]:
+            print(f"changing state of {file_name}")
+            self.file_rows[file_name]["checkbox"].setCheckState(2)
     
     def eventFilter(self, source, event):
         if source == self and event.type() == QEvent.ToolTip:
@@ -175,6 +195,13 @@ class FileSelectionTable(QGroupBox):
             # Restore the previously selected text if still valid
             if current_text in self.known_groups:
                 combo.setCurrentText(current_text)
+        group_select_combo = self.group_select.layout().itemAt(1).widget()
+        current_text = group_select_combo.currentText()
+        group_select_combo.clear()
+        group_select_combo.addItems(self.known_groups)
+        # Restore the previously selected text if still valid
+        if current_text in self.known_groups:
+            group_select_combo.setCurrentText(current_text)
                 
     def get_group_list(self):
         """Return the current group list."""
