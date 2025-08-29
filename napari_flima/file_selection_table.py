@@ -7,7 +7,7 @@ from math import ceil
 from scipy import signal
 
 from napari.utils.colormaps import Colormap
-from qtpy.QtCore import Qt, Signal, QRect, QEvent
+from qtpy.QtCore import Qt, Signal, QRect, QEvent, QTimer
 from qtpy.QtGui import (
     QClipboard, QPixmap, QColor, QStandardItem, QStandardItemModel,
     QPainter, QFont, QBrush, QIcon, QDoubleValidator, QIntValidator
@@ -19,7 +19,6 @@ from qtpy.QtWidgets import (
     QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QFormLayout,
     QGridLayout, QFileDialog, QSlider, QToolTip
 )
-from qtpy.QtCore import QTimer
 from functools import partial
 
 from .group_assignment_dialog import GroupAssignmentWindow
@@ -130,6 +129,18 @@ class FileSelectionTable(QGroupBox):
         # (D) Select all files in group
         self.group_select = QHBoxLayout()
         add_to_phasor_button = QPushButton("Add Group to Phasor Plot")
+        add_to_phasor_button.setStyleSheet("""
+            QPushButton {
+                background-color: #007acc;
+                color: white;
+                font-weight: bold;
+                border-radius: 4px;
+                padding: 4px 10px;
+            }
+            QPushButton:hover {
+                background-color: #005f99;
+            }
+        """)
         group_select_combo = QComboBox()
         group_select_combo.setFont(self.default_font)
         group_select_combo.setEditable(False)

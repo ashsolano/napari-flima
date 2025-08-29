@@ -8,7 +8,7 @@ from scipy import signal
 from matplotlib.colors import CSS4_COLORS
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from napari.utils.colormaps import Colormap
-from qtpy.QtCore import Qt, Signal, QRect, QEvent
+from qtpy.QtCore import Qt, Signal, QRect, QEvent, QTimer
 from qtpy.QtGui import (
     QClipboard, QPixmap, QColor, QStandardItem, QStandardItemModel,
     QPainter, QFont, QBrush, QIcon, QDoubleValidator, QIntValidator
@@ -20,7 +20,6 @@ from qtpy.QtWidgets import (
     QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QFormLayout,
     QGridLayout, QFileDialog, QSlider, QToolTip
 )
-from qtpy.QtCore import QTimer
 from functools import partial
 
 import imageio
@@ -734,6 +733,7 @@ class PhasorWidget(QWidget):
     def update_g_s_values(self, cursor_index, x, y):
         print("Updating G and S values...")
         """Upon releasing the draggable cursor, update the corresponding G and S input values."""
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         # Check if the cursor index is valid within our stored cursor rows.
         if cursor_index < len(self.cursor_analysis_widget.cursor_rows_data):
             row_data = self.cursor_analysis_widget.cursor_rows_data[cursor_index]
@@ -757,7 +757,8 @@ class PhasorWidget(QWidget):
         else:
             print(f"Cursor index {cursor_index} is out of range.")
 
-   
+        QApplication.restoreOverrideCursor()
+
     #Add here to execute the phasor dialog
     def open_phasor_plot_dialog(self):
         """
