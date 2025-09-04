@@ -156,6 +156,7 @@ class FLIMDialog(QDialog):
         for i in range(n):
             h = QHBoxLayout()
             lbl = QLabel(f"Channel {i+1}:", font=self.default_font)
+            lbl.setStyleSheet("QLabel {color: white}")
             combo = QComboBox()
             combo.addItems([
                 "None", "Intensity", "G-values", "S-values",
