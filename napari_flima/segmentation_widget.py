@@ -3,6 +3,7 @@ import shutil
 import numpy as np
 import pandas as pd
 import imageio
+import webbrowser
 
 from matplotlib import cm
 from scipy.ndimage import gaussian_filter
@@ -23,6 +24,7 @@ from qtpy.QtWidgets import (
 )
 from qtpy.QtGui import (QFont)
 
+from qtpy.QtCore import Signal
 
 # Bokeh imports
 from bokeh.plotting import figure
@@ -46,13 +48,14 @@ def compute_iou(boxA, boxB):
     union = boxA_area + boxB_area - inter_area
     return inter_area / float(union) if union > 0 else 0
 
-def segment_and_track(intensity_data, min_size=50, threshold=75, iou_threshold=0.3, dist_threshold=10, min_persistence=30):
+def segment_and_track(intensity_data, min_size=50, threshold=75, iou_threshold=0.3, dist_threshold=10):
     """
     Perform segmentation and tracking across multiple frames.
     Assumes intensity_data is a 3D array (T, H, W).
     Returns a segmented mask (same shape as intensity_data) and a color_map dictionary.
     """
     num_frames = intensity_data.shape[0]
+    min_persistence= num_frames
     segmented_masks = np.zeros_like(intensity_data, dtype=int)
     prev_objects, next_label, color_map, object_persistence = {}, 1, {}, {}
 
@@ -232,6 +235,17 @@ class SegmentationParametersWidget(QWidget):
         layout.addWidget(self.groupbox)
         layout.addStretch()
         self.setLayout(layout)
+
+    def update_num_frames(self):
+        print("updating min_persist")
+        first_file = next(iter(self.analysis_data["file_gs_data"].values()), None)
+        if first_file:
+            num_frames = first_file.get("intensity").shape[0]
+            print("got updated first file")
+        else:
+            num_frames = 30
+        print(f"new min_persist: {num_frames}")
+        self.spin_persist.setValue(num_frames)
         
     def on_apply_mask_clicked(self):
         # Disable the button so they can’t click again in the middle
@@ -293,7 +307,7 @@ class SegmentationParametersWidget(QWidget):
                     continue
 
             seg_masks, color_map = segment_and_track(
-                intensity, min_size, threshold, iou_threshold, dist_threshold, min_persistence
+                intensity, min_size, threshold, iou_threshold, dist_threshold
             )
             #print(f"File: {file_name} - Tracked Masks Unique Labels:", np.unique(seg_masks))
             self.segmentation_results[file_name] = seg_masks  # store the label image for later use
@@ -460,7 +474,7 @@ class SegmentationParametersWidget(QWidget):
                     # Mask for the current object in this frame:
                     object_mask = (seg_flat == label_val)
                     # Total masked pixels for this object using the combined cursor mask:
-                    overall_object_masked = np.sum(object_mask & combined_cursor_mask)
+                    overall_object_masked = np.sum(object_mask)
                     # If no masked pixels for this object, skip.
                     if overall_object_masked == 0:
                         continue
@@ -1273,6 +1287,7 @@ class ExportResultsWidget(QWidget):
             csv_path = os.path.join(output_dir, "downstream_analysis.csv")
             try:
                 df_wide.to_csv(csv_path, index=False)
+                webbrowser.open(csv_path) # untested on Linux or OSX, relies on unsupported funtinality
                 #print(f"Downstream analysis CSV saved: {csv_path}")
             except Exception as e:
                 print(f"Error saving downstream analysis CSV: {e}")
@@ -1719,6 +1734,18 @@ class MainSegmentationWidget(QWidget):
         # Add a refresh button to update the analysis data.
         self.refresh_button = QPushButton("Refresh Analysis Data")
         self.refresh_button.setFont(QFont("Arial", 10))
+        self.refresh_button.setStyleSheet("""
+            QPushButton {
+                background-color: #007acc;
+                color: white;
+                font-weight: bold;
+                border-radius: 4px;
+                padding: 4px 10px;
+            }
+            QPushButton:hover {
+                background-color: #005f99;
+            }
+        """)
         self.refresh_button.clicked.connect(self.refresh_analysis_data)
         
         # Add the sub-widgets and refresh button to the layout.
@@ -1745,6 +1772,7 @@ class MainSegmentationWidget(QWidget):
                     new_data["segmentation_results"] = seg_data
                     #print("Merged segmentation_results from segmentation widget:", list(seg_data.keys()))
             self.analysis_data = new_data
+            self.seg_params_widget.update_num_frames()
             #print("Analysis data refreshed:")
             #print("Cursor settings:", self.analysis_data.get("cursor_settings"))
             #print("Group list:", self.analysis_data.get("group_list"))
