@@ -474,7 +474,7 @@ class SegmentationParametersWidget(QWidget):
                     # Mask for the current object in this frame:
                     object_mask = (seg_flat == label_val)
                     # Total masked pixels for this object using the combined cursor mask:
-                    overall_object_masked = np.sum(object_mask & combined_cursor_mask)
+                    overall_object_masked = np.sum(object_mask)
                     # If no masked pixels for this object, skip.
                     if overall_object_masked == 0:
                         continue
