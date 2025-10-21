@@ -1149,6 +1149,8 @@ class ExportResultsWidget(QWidget):
                         # Only one frame; save as t=0
                         out_path = os.path.join(file_output_dir, "intensity_0.png")
                         img = intensity
+                        if type(img) != np.uint8:
+                            img = img.astype(np.uint8)
                         imageio.imwrite(out_path, img)
                     elif intensity.ndim == 3:
                         T = intensity.shape[0]
