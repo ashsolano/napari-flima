@@ -302,12 +302,12 @@ class FileSelectionTable(QGroupBox):
         val_high_label.setAlignment(Qt.AlignCenter)
         val_high_label.setText(str(max_intensity))
 
-        val_low_label.textEdited.connect(lambda val_low, val_high=int(val_high_label.text()), fn=file_name: self.threshold_changed.emit(fn, (int('0'+val_low), val_high)))
-        val_low_label.textEdited.connect(lambda val_low, val_high=val_high_label.text(): slider.setSliderPosition((int('0'+val_low), int(val_high))))
+        val_low_label.textEdited.connect(lambda val_low, fn=file_name: self.threshold_changed.emit(fn, (int('0'+val_low), int(val_high_label.text()))))
+        val_low_label.textEdited.connect(lambda val_low: slider.setSliderPosition((int('0'+val_low), int(val_high_label.text()))))
         val_low_label.editingFinished.connect(lambda fn=file_name: self.parent_widget.slider_released(fn))
 
-        val_high_label.textEdited.connect(lambda val_high, val_low=int(val_low_label.text()), fn=file_name: self.threshold_changed.emit(fn, (val_low, int('0'+val_high))))
-        val_high_label.textEdited.connect(lambda val_high, val_low=val_low_label.text(): slider.setSliderPosition((int(val_low), int('0'+val_high))))
+        val_high_label.textEdited.connect(lambda val_high, fn=file_name: self.threshold_changed.emit(fn, (int(val_low_label.text()), int('0'+val_high))))
+        val_high_label.textEdited.connect(lambda val_high: slider.setSliderPosition((int(val_low_label.text()), int('0'+val_high))))
         val_high_label.editingFinished.connect(lambda fn=file_name: self.parent_widget.slider_released(fn))
 
         slider.valueChanged.connect(lambda val, fn=file_name: self.threshold_changed.emit(fn, val))
