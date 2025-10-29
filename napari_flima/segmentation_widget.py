@@ -1059,25 +1059,29 @@ class ExportResultsWidget(QWidget):
         import statsmodels.api as sm
         import itertools as it
         import starbars
-        pass 
         df_wide = self.segmentation_widget.analyze_cursor_mask()
-        flima_lm_blue = ols("Ratio_blue ~ Group", data = df_wide).fit()
-        flima_lm_red = ols("Ratio_red ~ Group", data = df_wide).fit()
+        cursor_settings = self.analysis_data.get("cursor_settings", [])
+        active_cursors = [cs["color"] for cs in cursor_settings if cs.get("active")]
+        fig_dir = os.path.join(self.folder_line_edit.text(), "figures")
+        lms = {}
+        anova_res = {}
+        for c in active_cursors:
+            lms[c] = ols("Ratio_"+c+" ~ Group", data = df_wide).fit()
+            anova_res[c] = sm.stats.anova_lm(lms[c], typ=2)
 
-        table = sm.stats.anova_lm(flima_lm_blue, typ=2)
-
-        f, (ax1, ax2) = plt.subplots(1, 2, figsize=(16,8))
-        order = ["Condition "+str(x) for x in range(1,5)]
+        n_cursor = len(active_cursors)
+        f, axs = plt.subplots(1, n_cursor, figsize=(8*n_cursor,8))
+        order = self.phasor_widget.file_selection_widget.get_file_group_mapping().values()
         flima_palette = ["#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c", "#98df8a", "#d62728", "#ff9896", "#9467bd", "#c5b0d5"]
-        sig = [lm.t_test_pairwise("Group").result_frame["P>|t|"] for lm in [flima_lm_blue, flima_lm_red]]
+        sig = [list(lm.t_test_pairwise("Group").result_frame["P>|t|"]) for lm in lms.values()]
+        print(sig)
         annotations = [[(o[0], o[1], float(s[i])) for i,o in enumerate(it.combinations(order, 2))] for s in sig]
-
-        sns.violinplot(data = df_wide, x = "Group", y = "Ratio_blue", bw_adjust=.5, cut=1, linewidth=1, palette=flima_palette, ax=ax1)
-        sns.violinplot(data = df_wide, x = "Group", y = "Ratio_red", bw_adjust=.5, cut=1, linewidth=1, palette=flima_palette, ax=ax2)
-        starbars.draw_annotation(annotations[0], ax=ax1)
-        starbars.draw_annotation(annotations[1], ax=ax2)
+        print(annotations)
+        for i,c in enumerate(active_cursors):
+            sns.violinplot(data = df_wide, x = "Group", y = "Ratio_"+c, bw_adjust=.5, cut=1, linewidth=1, palette=flima_palette, ax=axs[i])
+            starbars.draw_annotation(annotations[0], ax=axs[i])
         f.set_dpi(400)
-        plt.show()
+        plt.savefig(os.path.join(fig_dir, "violin.png"))
 
 
     def export_results(self):
