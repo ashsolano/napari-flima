@@ -260,6 +260,7 @@ class PhasorWidget(QWidget):
            no longer appear in the phasor plot. The lifetime layer and cursor mask layer remain 
            for later reference.
         """
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         if state == Qt.Checked:
             threshold_value = self.file_selection_widget.file_rows[file_name]["slider"].value()
             self.update_threshold(file_name, threshold_value)
@@ -370,6 +371,7 @@ class PhasorWidget(QWidget):
     
         # Finally, replot the phasor using only the g/s data from checked files.
         self.replot_phasor()
+        QApplication.restoreOverrideCursor()
 
      
     # def replot_phasor(self):
