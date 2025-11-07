@@ -7,7 +7,7 @@ import webbrowser
 
 from matplotlib import cm
 from scipy.ndimage import gaussian_filter
-from scipy.stats import gaussian_kde, ttest_ind
+from scipy.stats import gaussian_kde, ttest_ind, describe
 
 from skimage.measure import label, regionprops
 from skimage.color import label2rgb
@@ -1072,6 +1072,7 @@ class ExportResultsWidget(QWidget):
         n_cursor = len(active_cursors)
         f, axs = plt.subplots(1, n_cursor, figsize=(8*n_cursor,8))
         order = self.phasor_widget.file_selection_widget.get_file_group_mapping().values()
+        order = [*{*order}]
         flima_palette = ["#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c", "#98df8a", "#d62728", "#ff9896", "#9467bd", "#c5b0d5"]
         sig = [list(lm.t_test_pairwise("Group").result_frame["P>|t|"]) for lm in lms.values()]
         print(sig)
@@ -1082,6 +1083,37 @@ class ExportResultsWidget(QWidget):
             starbars.draw_annotation(annotations[0], ax=axs[i])
         f.set_dpi(400)
         plt.savefig(os.path.join(fig_dir, "violin.png"))
+
+        file_groups = self.analysis_data['file_group_mapping']
+        group_summary = {}
+        for file,group in file_groups.items():
+            f2, ax2 = plt.subplots(figsize=(8,8))
+            f2.set_dpi(400)
+            intensity = self.analysis_data['file_gs_data'][file]['intensity']
+            shape = intensity.shape
+            intensity = intensity.reshape(shape[0], shape[1]*shape[2])
+            sns.histplot(data = intensity.T, palette=flima_palette, log_scale=True, ax = ax2)
+            plt.savefig(os.path.join(fig_dir, file+"intensity_kde.png"))
+            if group_summary.get(group) is not None:
+                group_summary[group] = group_summary[group].append(list(describe(intensity)))
+            else:
+                group_summary[group] = [describe(intensity)]
+        with open(os.path.join(fig_dir, 'descriptive_statistics.txt'), 'w') as f:
+            print(group_summary, file=f)
+
+        summary_intensity = np.array([np.clip(self.analysis_data['file_gs_data'][f]['intensity'].flatten(), a_min=0.001, a_max = None) for f in file_groups.keys()])
+        f4, ax4 = plt.subplots(figsize=(8,8))
+        f4.set_dpi(400)
+        sns.kdeplot(summary_intensity.T, log_scale=True, palette=flima_palette, ax=ax4)
+        plt.savefig(os.path.join(fig_dir, "intensity_summary_kde.png"))
+
+        for g in order:
+            grouped_intensity = np.array([np.clip(self.analysis_data['file_gs_data'][f]['intensity'].flatten(), a_min=0.001, a_max = None) for f in file_groups.keys() if file_groups[f] == g])
+            f3, ax3 = plt.subplots(figsize=(8,8))
+            f3.set_dpi(400)
+            sns.kdeplot(grouped_intensity.T, log_scale=True, palette=flima_palette, ax=ax3)
+            plt.savefig(os.path.join(fig_dir, g+"_intensity_summary_kde.png"))
+        
 
 
     def export_results(self):
