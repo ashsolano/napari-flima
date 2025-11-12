@@ -28,6 +28,18 @@ exclude_patterns = []
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = 'alabaster'
+html_theme = 'pydata_sphinx_theme'
 html_static_path = ['_static']
 html_logo = "flima-logo.png"
+
+html_theme_options = {
+  # ...
+  "secondary_sidebar_items": ["page-toc"],
+   "use_edit_page_button": False,
+   "show_toc_level": 2,
+  # ...
+}
+
+html_sidebars = {
+    "**": []
+}

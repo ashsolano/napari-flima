@@ -32,11 +32,54 @@ Configuring FLIMa
 
 Intro Dialog
 ~~~~~~~~~~~~
-.. image:: flima-intro-dialog.png
 
-Opening Files
+.. _dialogS-A:
+
+.. figure:: flima-intro-dialog.png
+
+    Fig A
+
+    (FLIMa configuration dialog)
+
+1. Acquisition Settings
+    Here we find the configuration options for microscopy image acquisition, each section needs to be configured to match the parameters of your microscope:
+
+    a. The type of FLIM data, either Time Domain (TCSPC FLIM) or Frequency Domain (FD FLIM)
+
+2. Channel Settings
+    Here we assign the channels of our image to the type of data contained, each channel of the image should be matched in order with a data type from the drop down (b):
+
+    a. Select the number of channels in the image
+
+    b. For each channel a row will be listed and needs to be assigned one of the follwing data types: (Intensity, G-values, S-values, Phase-values, Modulation-values)
+    
+    c. If your images don't contain G-value or S-value layers leave this option ticked, otherwise you may see some performance improvements if you untick it
+
+    d. Once all the options are configured click :code:`Confirm Settings` to launch the :code:`napari` application with the FLIMa widget
+
+.. tip::
+    Channel assignment details should be given by the microscope configuration
+
+Adding Images
 ~~~~~~~~~~~~~
-.. image:: napari-main-widget-empty.png
+.. _dialogS-B:
 
-.. image:: open-files.png
+.. figure:: napari-main-widget-empty.png
+
+    Fig B
+
+    (napari GUI with FLIMa widget on the right; widget tabs highlighted at (2))
+
+1. First Select :menuselection:`File --> Open File(s)...` from the tabs in the top left (:ref:`dialogS-C`), or press :kbd:`Ctrl-O`
+2. Next Make sure the :menuselection:`Phasor FLIM` tab is focused
+3. Add the condition groups if you're working with multiple samples and select which images to add to the new group in :ref:`dialog-D`
+4. Files will appear as rows in this box as they're added, individual file configuration is described in :ref:`usage`
+
+.. _dialogS-C:
+
+.. figure:: open-files.png
+
+    Fig C
+
+    (napari File Tab with Open File(s)... subsection highlighted)
 
