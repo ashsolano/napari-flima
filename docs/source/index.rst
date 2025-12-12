@@ -23,3 +23,5 @@ Navigation
    usage
 
    example
+
+   functions

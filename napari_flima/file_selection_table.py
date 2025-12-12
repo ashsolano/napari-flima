@@ -33,9 +33,16 @@ class FileSelectionTable(QGroupBox):
     A compact, gradient-style file selection widget (like channel config).
     - At the top: "Add Group" line + button so the user can define new group names.
     - A scroll area listing each file row:
-      [File label | checkbox | group combo | threshold slider + numeric label].
+    [File label | checkbox | group combo | threshold slider + numeric label].
+
     - Non-editable group combo (the user must add new groups via the "Add Group" field).
     - Minimal spacing to reduce vertical space.
+
+    :signal threshold_changed: emits when the intensity threshold of an image changes
+        (file_name -> string, (threshold_value_lower -> int, threshold_value_upper -> int))
+
+    :signal groups_updated: emits when the list of image groups is updated
+        (group_list -> list(string))
     """
 
     threshold_changed = Signal(str, object)  # (file_name, (threshold_value_lower, threshold_value_upper))
@@ -146,21 +153,28 @@ class FileSelectionTable(QGroupBox):
         group_select_combo.setEditable(False)
         group_select_combo.addItems(self.known_groups)
         group_select_combo.setFixedWidth(100)  # align combos
-        add_to_phasor_button.clicked.connect(self.add_group_to_phasor)
+        add_to_phasor_button.clicked.connect(self.add_group_to_phasor(selected_group = self.group_select.layout().itemAt(1).widget().currentText()))
         self.group_select.addWidget(add_to_phasor_button)
         self.group_select.addWidget(group_select_combo)
         main_layout.addLayout(self.group_select)
 
         main_layout.addStretch()
 
-    def add_group_to_phasor(self):
-        selected_group = self.group_select.layout().itemAt(1).widget().currentText()
+    def add_group_to_phasor(self, selected_group):
+        """Adds an entire group to the phasor plot
+        
+        :param str selected_group: name of group to add to phasor plot
+        """
         print(f"group selected to add: {selected_group}")
         for file_name in [file for file, group in self.get_file_group_mapping().items() if group == selected_group]:
             print(f"changing state of {file_name}")
             self.file_rows[file_name]["checkbox"].setCheckState(2)
     
     def eventFilter(self, source, event):
+        """Event filter for catching duplicate signals when programatically modifying values
+        
+        :meta private:
+        """
         if source == self and event.type() == QEvent.ToolTip:
             options = QStyleOptionGroupBox()
             control = self.style().hitTestComplexControl(
@@ -197,7 +211,7 @@ class FileSelectionTable(QGroupBox):
         
 
     def update_all_combos(self):
-        """Refreshes the group combo box items in all file rows."""
+        """Refreshes the group combo box items in all file rows"""
         for row_info in self.file_rows.values():
             combo = row_info["group_combo"]
             current_text = combo.currentText()
@@ -215,13 +229,15 @@ class FileSelectionTable(QGroupBox):
             group_select_combo.setCurrentText(current_text)
                 
     def get_group_list(self):
-        """Return the current group list."""
+        """Return the current list of groups"""
         return self.known_groups
 
     def add_file(self, file_path, layer_data):
-        """
-        Adds a row for the given file. Layout: [checkbox | file_name | group_combo | threshold].
+        """Adds a row for the given file. Layout: [checkbox | file_name | group_combo | threshold].
         Each has fixed width to align columns.
+
+        :param str file_path: file path of new file
+        :param numpy.ndarray layer_data: channel data for the new file
         """
 
         file_name = os.path.basename(file_path)
@@ -338,8 +354,9 @@ class FileSelectionTable(QGroupBox):
         self.scroll_area.setMinimumHeight(min(len(self.file_rows)*50, 200))
 
     def remove_file(self, file_path):
-        """
-        Removes the row for the given file_path from the layout.
+        """Removes a row from the file selection table
+
+        :param str file_path: path of the file to remove
         """
         file_name = os.path.basename(file_path)
         if file_name not in self.file_rows:
@@ -372,16 +389,20 @@ class FileSelectionTable(QGroupBox):
         self.scroll_area.setMinimumHeight(min(len(self.file_rows)*50, 200))
 
     def on_checkbox_state_changed(self, state, file_name):
-        """If your main widget has on_checkbox_state_changed, call it."""
+        """If your main widget has on_checkbox_state_changed, call it.
+        
+        :meta private:
+        """
         if hasattr(self.parent_widget, "on_checkbox_state_changed"):
             self.parent_widget.on_checkbox_state_changed(state, file_name)
             
     
     def get_file_group_mapping(self):
-        """
-        Returns a dictionary mapping file names to the currently selected group.
-        Example:
-            { "file1.tif": "Condition 1", "file2.tif": "PLA2", ... }
+        """Get a dictionary mapping of images to the currently selected group
+        Example: { "file1.tif": "Condition 1", "file2.tif": "PLA2", ... }
+
+        :returns: a dictionary that maps file names of images to the name of the group they're assigned to
+        :rtype: dict[str, str]
         """
         mapping = {}
         for file_name, row_info in self.file_rows.items():
@@ -390,4 +411,11 @@ class FileSelectionTable(QGroupBox):
         return mapping
     
     def _set_file_group(self, file_name, group):
+        """Manually sets the group for a given image
+        
+        :param str file_name: file name of image
+        :param str group: name of group to assign
+
+        :meta public:
+        """
         self.file_rows[file_name]["group_combo"].setCurrentIndex(self.known_groups.index(group))

@@ -1,3 +1,5 @@
+.. _setup:
+
 Getting Started
 ===============
 

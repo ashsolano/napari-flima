@@ -40,6 +40,8 @@ html_theme_options = {
   # ...
 }
 
+autodoc_typehints = "both"
+
 html_sidebars = {
     "**": []
 }

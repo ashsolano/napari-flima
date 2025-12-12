@@ -1,3 +1,7 @@
+"""
+Utility classes and functions for FLIMa
+"""
+
 import os
 import numpy as np
 import superqt as sqt
@@ -30,7 +34,9 @@ import imageio
 # Supporting utils file selection table 
 
 def clear_layout(layout):
-    """Recursively clear all items from a layout."""
+    """Recursively clear all items from a layout.
+    
+    :param layout: layout to clear"""
     if layout is not None:
         while layout.count():
             item = layout.takeAt(0)
@@ -43,9 +49,15 @@ def clear_layout(layout):
 # ---------------------------------------------------------------------------
 # Supporting utils for  phasor plot dialog 
 
+
 class PlotCanvas(FigureCanvas):
-    """Canvas supporting draggable cursors on a Matplotlib axis, with blitting for speed."""
-    cursorReleased = Signal(int, float, float)  # (cursor_index, x, y)
+    """Canvas class supporting draggable cursors on a Matplotlib axis, with blitting for speed.
+    
+    :signal cursorReleased: emits when a draggable cursor is released
+        (cursor_index -> int, x -> float, y -> float)
+        
+    """
+    cursorReleased = Signal(int, float, float)
 
     def __init__(self, fig, ax, parent=None):
         super().__init__(fig)
@@ -78,6 +90,14 @@ class PlotCanvas(FigureCanvas):
         self.background = self.copy_from_bbox(self.ax.bbox)
 
     def add_draggable_cursor(self, x, y, radius, color='blue'):
+        """
+        Adds a draggable cursor to the canvas
+        
+        :param int x: x coordinate of the cursor
+        :param int y: y coordinate of the cursor
+        :param float radius: radius coordinate of the cursor
+        :param str color: colour of the cursor
+        """
         circle = plt.Circle((x, y), radius,
                             edgecolor=color, facecolor='none',
                             lw=2, zorder=10)
@@ -88,11 +108,23 @@ class PlotCanvas(FigureCanvas):
         self.background = self.copy_from_bbox(self.ax.bbox)
     
     def update_draggable_cursor_pos(self, idx, x, y):
+        """
+        Updates the position of a draggable cursor
+        
+        :param int idx: Cursor index in list of draggable cursors
+        :param int x: new x coordinate
+        :param int y: new y coordinate
+        """
         self.draggable_cursors[idx].center = x, y
         self.draw()
         self.background = self.copy_from_bbox(self.ax.bbox)
 
     def remove_draggable_cursor(self, idx):
+        """
+        Removes a draggable cursor from the canvas
+        
+        :param int idx: Cursor index in list of draggable cursors
+        """
         if 0 <= idx < len(self.draggable_cursors):
             circle = self.draggable_cursors.pop(idx)
             circle.remove()
@@ -137,6 +169,9 @@ class PlotCanvas(FigureCanvas):
             self.background = self.copy_from_bbox(self.ax.bbox)
 
     def plot_universal_circle(self):
+        """
+        Plots the universal circle on the canvas
+        """
         self.ax.clear()
         self.ax.set_aspect('equal', adjustable='box')
         theta = np.linspace(0, 2*np.pi, 200)
@@ -159,10 +194,10 @@ class PlotCanvas(FigureCanvas):
 def extract_channel(data, channel_idx=0):
     """
     Returns the channel image for thresholding, robust to 2D, 3D, or 4D input.
-    Always returns:
-      - (t, y, x) if 4D input
-      - (y, x) if 3D input
-      - (y, x) if 2D input
+
+    :returns: (t, y, x) if 4D input
+    :returns: (y, x) if 3D or 2D input
+    :rtype: tuple (int,int,int) | tuple (int,int)
     """
     if data.ndim == 4:
         return data[:, channel_idx, :, :].copy()
@@ -181,8 +216,10 @@ def extract_channel(data, channel_idx=0):
 # Supporting utils for cursor selection widget 
 
 class ColorDelegate(QStyledItemDelegate):
-    """This will create a colour selection drop-down menu with a thumbnail filled with the colour option and the colour name"""
+    """Colour selection drop-down menu with a thumbnail filled with colour options and names
     
+    :meta private:
+    """
     def __init__(self, parent=None):
         super(ColorDelegate, self).__init__(parent)
 
@@ -208,7 +245,10 @@ class ColorDelegate(QStyledItemDelegate):
         return size
 
 class ColorSelectorApp(QComboBox):
-    """This will allow for selection of the created colour drop down options based on the colour model generated"""
+    """This will allow for selection of the created colour drop down options based on the colour model generated
+    
+    :meta private:
+    """
     def __init__(self, parent=None):
         super(ColorSelectorApp, self).__init__(parent)
 
@@ -245,7 +285,10 @@ class ColorSelectorApp(QComboBox):
 
     # Create color model with all CSS4 colors, ordered by a color 
     def create_color_model(self):
-        """This will create a colour model so that CSS4 colours are ordered by colour gradient"""
+        """This will create a colour model so that CSS4 colours are ordered by colour gradient
+        
+        :meta private:
+        """
         
         model = QStandardItemModel(self)
         sorted_colors = sorted(CSS4_COLORS.items(), key=lambda item: QColor(item[1]).hue())  # Sort by hue for a gradient effect
@@ -268,7 +311,10 @@ class ColorSelectorApp(QComboBox):
         return self.currentText()
     
 class NumericDelegate(QStyledItemDelegate):
-    """A delegate that provides a narrow QLineEdit with a double validator for numeric columns."""
+    """A delegate that provides a narrow QLineEdit with a double validator for numeric columns.
+    
+    :meta private:
+    """
     def createEditor(self, parent, option, index):
         line_edit = QLineEdit(parent)
         # Accept up to 3 decimals, range [0.0 .. 999.999] (adjust as needed)
