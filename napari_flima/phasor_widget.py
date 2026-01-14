@@ -101,6 +101,12 @@ class PhasorWidget(QWidget):
         self.dialog.apply_filter_button.clicked.connect(self.apply_median_filter)
         self.dialog.reset_filter_button.clicked.connect(self.reset_filter)
         
+        # Debouncing timer for phasor replotting
+        self.replot_timer = QTimer()
+        self.replot_timer.setSingleShot(True)
+        self.replot_timer.setInterval(200)  # 200ms delay
+        self.replot_timer.timeout.connect(self.replot_phasor)
+        
  
     
     def on_layer_added(self, event):
@@ -304,7 +310,7 @@ class PhasorWidget(QWidget):
                 else:
                     self.current_file = None
             
-            self.replot_phasor()
+            self.replot_timer.start()
 
     @staticmethod
     def run_phasor_calculation(layer_data, intro_params, current_mask):
@@ -397,7 +403,7 @@ class PhasorWidget(QWidget):
         self.current_file = file_name
         
         # Finally, replot the phasor using only the g/s data from checked files.
-        self.replot_phasor()
+        self.replot_timer.start()
 
 
      
@@ -749,7 +755,7 @@ class PhasorWidget(QWidget):
         
         self.smoothed_gs_data.update(results)
         self.median_filter_applied = True
-        self.replot_phasor()
+        self.replot_timer.start()
 
 
     
@@ -762,7 +768,7 @@ class PhasorWidget(QWidget):
         # Optionally, reset the smoothed data to match the original.
         if self.file_gs_data:
             self.smoothed_gs_data = {file_name: data.copy() for file_name, data in self.file_gs_data.items()}
-        self.replot_phasor()
+        self.replot_timer.start()
 
     
    
