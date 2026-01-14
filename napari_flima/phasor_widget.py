@@ -120,6 +120,10 @@ class PhasorWidget(QWidget):
              slider = self.file_selection_widget.file_rows[file_name]["slider"]
              val = slider.value()
              self.update_image_layer(file_name, val[0], val[1])
+             
+             # Trigger phasor recalculation if checked
+             if self.file_selection_widget.file_rows[file_name]["checkbox"].isChecked():
+                 self._start_phasor_worker(file_name)
 
     def load_mask_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select Mask File", "", "Images (*.tif *.tiff *.png *.jpg)")
@@ -195,23 +199,13 @@ class PhasorWidget(QWidget):
             mask_lower = intensity_image < threshold_lower
             mask_upper = intensity_image > threshold_upper
             mask = np.logical_or(mask_lower, mask_upper)
-            mask0 = mask[0]
+            # mask0 = mask[0] 
         else:
             mask_lower = intensity_image < threshold_lower
             mask_upper = intensity_image > threshold_upper
             mask = np.logical_or(mask_lower, mask_upper)
-            mask0 = mask
-        if not checkbox_checked:
-            rgba_mask = np.zeros(mask0.shape + (4,), dtype=np.uint8)
-            rgba_mask[mask0, 0] = 255
-            rgba_mask[mask0, 3] = 128
-            if mask0.sum() > 0:
-                overlay = self._create_or_update_overlay(mask_layer_name, rgba_mask)
-            else:
-                self.remove_overlay(mask_layer_name)
-        else:
-            self.remove_overlay(mask_layer_name)
-            
+            # mask0 = mask
+
         # --- Apply External Mask Layer if selected ---
         mask_selection_combo = self.file_selection_widget.file_rows[file_name].get("mask_combo")
         if mask_selection_combo:
@@ -221,14 +215,13 @@ class PhasorWidget(QWidget):
                 mask_data = mask_layer_obj.data
                 
                 # Treat non-zero values as 1 (inclusion mask)
-                # Actually, usually mask means "1 is ROI". 
+                # Usually mask means "1 is ROI". 
                 # If we want to EXCLUDE pixels that are 0 in the mask:
                 # We add to the 'mask' (which is the exclusion mask for setting to 0).
                 # So if mask_data == 0, we want to exclude.
                 
                 # Broadcasting logic
                 # Target shape: intensity_image.shape
-                # mask_data shape: ?
                 
                 # 1. Binarize
                 binary_ext_mask = (mask_data != 0)
@@ -252,9 +245,6 @@ class PhasorWidget(QWidget):
                      # Frame mismatch?
                      if exclusion_ext_mask.shape != intensity_image.shape:
                          print(f"Frame/Shape mismatch between mask {selected_mask_name} and image {file_name}. Applying anyway as per request.")
-                         # Strategy: If T dim differs, broadcast or loop?
-                         # Safe fallback: apply frame by frame with modulo? 
-                         # Or simpler: if 2D shapes match, use simple broadcasting if T=1
                          
                          if exclusion_ext_mask.shape[1:] == intensity_image.shape[1:]:
                              # Spatial dims match.
@@ -263,13 +253,10 @@ class PhasorWidget(QWidget):
                                   final_ext_mask = np.broadcast_to(exclusion_ext_mask[0], intensity_image.shape)
                              else:
                                   # Iterate and assign?
-                                  # Let's create a full size mask
                                   final_ext_mask = np.zeros(intensity_image.shape, dtype=bool)
                                   T_img = intensity_image.shape[0]
                                   T_mask = exclusion_ext_mask.shape[0]
                                   for t in range(T_img):
-                                      # Use modulo for looping if mask is shorter, or just clamp?
-                                      # "Apply mask to each frame anyway" -> maybe loop if short.
                                       t_m = t % T_mask
                                       final_ext_mask[t] = exclusion_ext_mask[t_m]
                          else:
@@ -284,6 +271,23 @@ class PhasorWidget(QWidget):
                 if final_ext_mask is not None:
                     mask = np.logical_or(mask, final_ext_mask)
 
+        # Prepare mask0 for overlay (frame 0)
+        if mask.ndim == 3:
+            mask0 = mask[0]
+        else:
+            mask0 = mask
+
+        if not checkbox_checked:
+            rgba_mask = np.zeros(mask0.shape + (4,), dtype=np.uint8)
+            rgba_mask[mask0, 0] = 255
+            rgba_mask[mask0, 3] = 128
+            if mask0.sum() > 0:
+                overlay = self._create_or_update_overlay(mask_layer_name, rgba_mask)
+            else:
+                self.remove_overlay(mask_layer_name)
+        else:
+            self.remove_overlay(mask_layer_name)
+            
         # Apply threshold (and external mask)
         intensity_image[mask] = 0
         # Copy back into right place in data
@@ -354,6 +358,11 @@ class PhasorWidget(QWidget):
         """Called when the slider is released; remove the red overlay for that file."""
         mask_layer_name = file_name + "_mask"
         QTimer.singleShot(0, lambda: self.remove_overlay(mask_layer_name))
+        
+        # Trigger phasor recalculation if checked
+        if file_name in self.file_selection_widget.file_rows:
+             if self.file_selection_widget.file_rows[file_name]["checkbox"].isChecked():
+                 self._start_phasor_worker(file_name)
 
     
    
@@ -371,34 +380,7 @@ class PhasorWidget(QWidget):
             QApplication.setOverrideCursor(Qt.WaitCursor)
             threshold_value = self.file_selection_widget.file_rows[file_name]["slider"].value()
             self.update_threshold(file_name, threshold_value)
-            
-            # Prepare data for worker
-            layer_data = self.file_selection_widget.file_rows[file_name]["layer_data"]
-            current_mask = self.current_mask.copy() if self.current_mask is not None else None
-            # Copy intro_params to ensure thread safety (shallow copy is usually enough for dict of primitives)
-            intro_params = self.intro_params.copy()
-
-            # Create worker and thread
-            thread = QThread()
-            worker = Worker(self.run_phasor_calculation, layer_data, intro_params, current_mask)
-            worker.moveToThread(thread)
-            
-            # Store references to prevent garbage collection
-            if not hasattr(self, "_threads"):
-                self._threads = {}
-            self._threads[file_name] = (thread, worker)
-
-            # Connect signals
-            thread.started.connect(worker.run)
-            worker.result.connect(partial(self.on_phasor_result, file_name=file_name, current_mask=current_mask))
-            worker.finished.connect(thread.quit)
-            worker.finished.connect(worker.deleteLater)
-            # Cleanup storage when thread finishes
-            thread.finished.connect(thread.deleteLater)
-            thread.finished.connect(lambda: self._cleanup_thread(file_name))
-            thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
-            
-            thread.start()
+            self._start_phasor_worker(file_name)
 
         else:
             # If unchecked, remove this file's g/s data from phasor plotting.
@@ -412,6 +394,40 @@ class PhasorWidget(QWidget):
                     self.current_file = None
             
             self.replot_timer.start()
+
+    def _start_phasor_worker(self, file_name):
+        # Prepare data for worker
+        layer_data = self.file_selection_widget.file_rows[file_name]["layer_data"]
+        current_mask = self.current_mask.copy() if self.current_mask is not None else None
+        # Copy intro_params to ensure thread safety (shallow copy is usually enough for dict of primitives)
+        intro_params = self.intro_params.copy()
+
+        # Create worker and thread
+        thread = QThread()
+        worker = Worker(self.run_phasor_calculation, layer_data, intro_params, current_mask)
+        worker.moveToThread(thread)
+        
+        # Store references to prevent garbage collection
+        if not hasattr(self, "_threads"):
+            self._threads = {}
+        self._threads[file_name] = (thread, worker)
+
+        # Connect signals
+        thread.started.connect(worker.run)
+        worker.result.connect(partial(self.on_phasor_result, file_name=file_name, current_mask=current_mask))
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        # Cleanup storage when thread finishes
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._cleanup_thread(file_name))
+        # Only restore cursor if we set it? 
+        # Ideally we track cursor stack, but restoreOverrideCursor is safe if matching set calls.
+        # But here we might call start_worker multiple times.
+        # Simple fix: emit a signal or just assume UI interaction blocked?
+        # Let's just restore cursor at end.
+        thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
+        
+        thread.start()
 
     @staticmethod
     def run_phasor_calculation(layer_data, intro_params, current_mask):
@@ -592,11 +608,18 @@ class PhasorWidget(QWidget):
                 g_arr = raw["g_image"]
                 s_arr = raw["s_image"]
                 if g_arr.ndim == 3:
-                    g_list.append(g_arr[t].flatten())
-                    s_list.append(s_arr[t].flatten())
+                    g_slice = g_arr[t].flatten()
+                    s_slice = s_arr[t].flatten()
+                    # Filter out zero values (masked)
+                    valid = (g_slice != 0) | (s_slice != 0)
+                    g_list.append(g_slice[valid])
+                    s_list.append(s_slice[valid])
                 else:
-                    g_list.append(g_arr.flatten())
-                    s_list.append(s_arr.flatten())
+                    g_slice = g_arr.flatten()
+                    s_slice = s_arr.flatten()
+                    valid = (g_slice != 0) | (s_slice != 0)
+                    g_list.append(g_slice[valid])
+                    s_list.append(s_slice[valid])
             # Concatenate ALL files' points at this timepoint
             g_concat = np.concatenate(g_list)
             s_concat = np.concatenate(s_list)
@@ -615,7 +638,7 @@ class PhasorWidget(QWidget):
               
 
 
-   
+    
     @staticmethod
     def calculate_g_s_coordinates(image_data, intro_params, zero_indices=None):
         """
@@ -670,6 +693,7 @@ class PhasorWidget(QWidget):
             if zero_indices is not None:
                 g_image[zero_indices] = 0
                 s_image[zero_indices] = 0
+                intensity[zero_indices] = 0
     
         elif flim_type == "TCSPC FLIM":
             # Robust extraction for all dimensions:
@@ -695,6 +719,7 @@ class PhasorWidget(QWidget):
             if zero_indices is not None:
                 g_values_m[zero_indices] = 0
                 s_values_m[zero_indices] = 0
+                intensity[zero_indices] = 0
     
             g_image = g_values_m.copy()
             s_image = s_values_m.copy()
