@@ -850,101 +850,165 @@ class PhasorWidget(QWidget):
           - If g_data is 3D (T, H, W), the layer becomes (T, 1, H, W, 4).
         This aligns the time axis with the viewer, letting Napari handle multi-frame displays.
         """
-        print("Selecting pixels")
+        #print("Selecting pixels (threaded)")
         
-        # Ensure intensity data is available.
         if not hasattr(self, 'intensity') or self.intensity is None:
-            print("Error: intensity data is not initialized.")
+            # print("Error: intensity data is not initialized.")
             return
-    
-        # Loop over each active file (checked) in self.file_gs_data.
+
+        # 1) Gather data from UI (must happen on main thread)
+        #    We need:
+        #      - file_gs_data / smoothed_gs_data (the G/S arrays)
+        #      - active cursor parameters (radius, G, S, color)
+        #      - median_filter_applied flag
+
+        cursor_params = []
+        for row_data in self.cursor_analysis_widget.cursor_rows_data:
+            if row_data["checkbox"].isChecked():
+                try:
+                    r = float(row_data["col_2"].text())
+                    g_c = float(row_data["col_3"].text())
+                    s_c = float(row_data["col_4"].text())
+                    c_txt = row_data["color_selector"].currentText()
+                    params = {
+                        "radius": r,
+                        "g_center": g_c,
+                        "s_center": s_c,
+                        "color_text": c_txt
+                    }
+                    cursor_params.append(params)
+                except Exception as e:
+                    print(f"Error parsing cursor row: {e}")
+                    continue
+        
+        if not cursor_params:
+            # If no cursors active, we might want to clear existing masks?
+            # For now, just return or handle as empty.
+            pass
+
+        # Prepare a lightweight dict of file -> (g_array, s_array)
+        # to avoid passing 'self' to worker.
+        files_to_process = {}
         for file_name, file_data in self.file_gs_data.items():
-            # Decide whether to use smoothed data or original data.
             if self.median_filter_applied and file_name in self.smoothed_gs_data:
-                g_data = self.smoothed_gs_data[file_name]["g_image"]
-                s_data = self.smoothed_gs_data[file_name]["s_image"]
+                g = self.smoothed_gs_data[file_name]["g_image"]
+                s = self.smoothed_gs_data[file_name]["s_image"]
             else:
-                g_data = file_data["g_image"]
-                s_data = file_data["s_image"]
-    
-            if g_data is None:
-                print(f"No g data available for {file_name}.")
-                continue
-    
-            # Create an RGBA array for highlighted pixels for this file.
-            # If g_data is (T, H, W), we initially build (T, H, W, 4).
-            # If g_data is (H, W), we build (H, W, 4).
+                g = file_data["g_image"]
+                s = file_data["s_image"]
+            
+            if g is not None and s is not None:
+                files_to_process[file_name] = (g, s)
+
+        if not files_to_process:
+            return
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        
+        # 2) Create Thread & Worker
+        thread = QThread()
+        worker = Worker(self.calculate_cursor_masks, files_to_process, cursor_params)
+        worker.moveToThread(thread)
+        
+        # Store ref
+        if not hasattr(self, "_threads"):
+            self._threads = {}
+        self._threads['cursor_update'] = (thread, worker)
+
+        thread.started.connect(worker.run)
+        worker.result.connect(self.on_cursor_mask_result)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._cleanup_thread('cursor_update'))
+        thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
+        
+        thread.start()
+
+    @staticmethod
+    def calculate_cursor_masks(files_map, cursor_params):
+        """
+        Static method running in worker thread.
+        files_map: { filename: (g_arr, s_arr) }
+        cursor_params: list of dicts {radius, g_center, s_center, color_text}
+        Returns: dict { filename: (highlighted_pixels_rgba, layer_shape_hint) }
+        """
+        results = {}
+        
+        for file_name, (g_data, s_data) in files_map.items():
+            # Create blank RGBA
             if g_data.ndim == 3:
+                # (T, H, W, 4)
                 highlighted_pixels = np.zeros(g_data.shape + (4,), dtype=np.uint8)
             else:
+                # (H, W, 4)
                 highlighted_pixels = np.zeros(g_data.shape + (4,), dtype=np.uint8)
-            #print(f"For file {file_name}, highlighted_pixels shape: {highlighted_pixels.shape}")
-    
-            # Loop through each cursor row in the CursorAnalysisWidget.
-            for row_data in self.cursor_analysis_widget.cursor_rows_data:
-                if row_data["checkbox"].isChecked():
-                    try:
-                        radius = float(row_data["col_2"].text())
-                        g_center = float(row_data["col_3"].text())
-                        s_center = float(row_data["col_4"].text())
-                        cursor_color = row_data["color_selector"].currentText()
-                    except Exception as e:
-                        print(f"Error retrieving cursor settings for {file_name}: {e}")
-                        continue
-    
-                    #print(f"Cursor settings for {file_name} - "
-                          #f"Radius: {radius}, G: {g_center}, S: {s_center}, Color: {cursor_color}")
-                    rgb = QColor(cursor_color).getRgb()[:3]
-                    #print(f"RGB: {rgb}")
-    
-                    # Compute mask for each time frame if multi-frame, else for 2D.
-                    if g_data.ndim == 3:
-                        for t in range(g_data.shape[0]):
-                            distance = np.hypot(g_data[t] - g_center, s_data[t] - s_center)
-                            mask = distance <= radius
-                            highlighted_pixels[t][mask] = rgb + (255,)
-                    else:
-                        distance = np.hypot(g_data - g_center, s_data - s_center)
-                        mask = distance <= radius
-                        highlighted_pixels[mask] = rgb + (255,)
-                    #print(f"Finished updating highlighted pixels for {file_name} for this cursor.")
-    
-            # Save computed highlighted pixels in a dictionary for potential reuse.
-            if not hasattr(self, 'highlighted_pixels_dict'):
-                self.highlighted_pixels_dict = {}
-            self.highlighted_pixels_dict[file_name] = highlighted_pixels
-    
-            # --- Prepare data for display so that the time axis aligns properly ---
-            # If highlighted_pixels is 2D (H, W, 4), we expand to (1, 1, H, W, 4).
-            # If it's 3D (T, H, W, 4), we expand to (T, 1, H, W, 4).
-            # This mirrors your tau_av expansions.
+
+            for p in cursor_params:
+                radius = p["radius"]
+                g_c = p["g_center"]
+                s_c = p["s_center"]
+                color_name = p["color_text"]
+                
+                # QColor is not thread-safe safe or not available without GUI? 
+                # Actually QColor is QtGui, often okay, but safer to parse or pass RGB.
+                # simpler: we can use QColor here if QtGui is imported.
+                # If crash, we move rgb parsing to main thread.
+                try:
+                    rgb = QColor(color_name).getRgb()[:3]
+                except:
+                    rgb = (255, 0, 0)
+
+                if g_data.ndim == 3:
+                     # Vectorized over T is tricky if memory large, but let's try loop or broadcast
+                     # g_data: (T, Y, X)
+                    dist = np.hypot(g_data - g_c, s_data - s_c)
+                    mask = dist <= radius
+                    # mask is (T, Y, X)
+                    # highlight is (T, Y, X, 4)
+                    # We want to assign color where mask is True
+                    highlighted_pixels[mask] = rgb + (255,)
+                else:
+                    dist = np.hypot(g_data - g_c, s_data - s_c)
+                    mask = dist <= radius
+                    highlighted_pixels[mask] = rgb + (255,)
+            
+            # Prepare layer data shape
+            # If 2D (H, W, 4) -> (1, 1, H, W, 4)
+            # If 3D (T, H, W, 4) -> (T, 1, H, W, 4)
             if g_data.ndim == 2:
-                # Means highlighted_pixels is (H, W, 4).
                 layer_data = np.expand_dims(np.expand_dims(highlighted_pixels, axis=0), axis=0)
             elif g_data.ndim == 3:
-                # Means highlighted_pixels is (T, H, W, 4).
                 layer_data = np.expand_dims(highlighted_pixels, axis=1)
             else:
                 layer_data = highlighted_pixels
-    
-            # Determine the cursor mask layer name (using base file name).
+            
+            results[file_name] = layer_data
+
+        return results
+
+    def on_cursor_mask_result(self, results):
+        """
+        Update Napari layers with calculated masks.
+        results: { filename: layer_data_array }
+        """
+        if not hasattr(self, 'cursor_mask_layers'):
+            self.cursor_mask_layers = {}
+
+        for file_name, layer_data in results.items():
             base_name = os.path.splitext(os.path.basename(file_name))[0]
             cursor_layer_name = f"{base_name}_cursor_mask"
-    
-            # Update or add the cursor mask layer for this file.
+            
             if cursor_layer_name in self.viewer.layers:
-                #print(f"Updating existing '{cursor_layer_name}' layer for {file_name}.")
                 self.viewer.layers[cursor_layer_name].data = layer_data
             else:
-                #print(f"Adding new '{cursor_layer_name}' layer for {file_name}.")
                 new_layer = self.viewer.add_image(
                     layer_data,
                     name=cursor_layer_name,
                     colormap=None
                 )
                 self.cursor_mask_layers[file_name] = new_layer
-    
-            # Reorder the cursor mask layer so it is immediately above its corresponding image.
+
             self._order_cursor_mask_above_image(file_name)
     
     
