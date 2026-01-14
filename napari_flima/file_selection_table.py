@@ -29,14 +29,11 @@ import imageio
 # File selection table widget               
 
 class FileSelectionTable(QGroupBox):
-    """
-    A compact, gradient-style file selection widget (like channel config).
-    - At the top: "Add Group" line + button so the user can define new group names.
-    - A scroll area listing each file row:
-    [File label | checkbox | group combo | threshold slider + numeric label].
+    """Class inheriting QGroupBox for managing image thresholding and grouping in Phasor FLIM widget
 
-    - Non-editable group combo (the user must add new groups via the "Add Group" field).
-    - Minimal spacing to reduce vertical space.
+    - At the top: "Add Group" line + button so the user can define new group names.
+    - A scroll area listing each file row: [checkbox | File label | group combo | threshold range slider + numeric label].
+    - Checkboxes beside file names add corrsponding image data to phasor plot
 
     :signal threshold_changed: emits when the intensity threshold of an image changes
         (file_name -> string, (threshold_value_lower -> int, threshold_value_upper -> int))

@@ -36,7 +36,7 @@ html_theme_options = {
   # ...
   "secondary_sidebar_items": ["page-toc"],
    "use_edit_page_button": False,
-   "show_toc_level": 2,
+   "show_toc_level": 3,
   # ...
 }
 
