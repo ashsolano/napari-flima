@@ -67,6 +67,7 @@ class PhasorWidget(QWidget):
         # --- File Selection Section ---
         self.file_selection_widget = FileSelectionTable(self, title="🛈 &File Selection")
         self.file_selection_widget.threshold_changed.connect(self.update_threshold)
+        self.file_selection_widget.mask_changed.connect(self.on_mask_changed)
         layout.addWidget(self.file_selection_widget)
         
     
@@ -109,8 +110,39 @@ class PhasorWidget(QWidget):
         
  
     
+    def update_threshold(self, file_name, threshold_value):
+        self.update_image_layer(file_name, threshold_value[0], threshold_value[1])
+        
+    def on_mask_changed(self, file_name, mask_name):
+        # Trigger update of the image layer to re-apply mask + threshold
+        if file_name in self.file_selection_widget.file_rows:
+             # Retrieve current threshold values to pass
+             slider = self.file_selection_widget.file_rows[file_name]["slider"]
+             val = slider.value()
+             self.update_image_layer(file_name, val[0], val[1])
+
+    def load_mask_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Mask File", "", "Images (*.tif *.tiff *.png *.jpg)")
+        if file_path:
+            # Load as a labels layer or image layer? 
+            # Usually mask is binary, but user said "treat non zero values as 1s", implies it might be intensity image.
+            # Loading as Image layer is safer.
+            try:
+                self.viewer.open(file_path, name=os.path.basename(file_path), plugin='napari')
+            except Exception as e:
+                print(f"Error loading mask file: {e}")
+            
+    def update_mask_choices(self):
+        # list all image/label layers that are NOT the current analysis files? 
+        # Or just list all layers. The user can distinguish.
+        # But we need to avoid self-selection loops if possible? (Simplicity: just list all).
+        layers = [layer.name for layer in self.viewer.layers if hasattr(layer, 'data')]
+        self.file_selection_widget.update_mask_choices(layers)
+
     def on_layer_added(self, event):
         layer = event.value
+        self.update_mask_choices() # Update mask choices whenever a layer is added
+        
         if hasattr(layer, 'source') and layer.source.path:
             file_path = layer.source.path
             
@@ -129,19 +161,15 @@ class PhasorWidget(QWidget):
                     idx = 0
                 layer.metadata = layer.metadata or {}
                 layer.metadata['grid'] = (0, idx)  # e.g., row 0, column = index
-
-
+    
     def on_layer_removed(self, event):
-        layer = event.value
-        if hasattr(layer, 'source') and layer.source.path:
-            file_path = layer.source.path
-            self.file_selection_widget.remove_file(file_path)
+        self.update_mask_choices() # Update mask choices whenever a layer is removed
+
 
     def update_threshold(self, file_name, threshold_value):
         self.update_image_layer(file_name, threshold_value[0], threshold_value[1])
     
-    
-            
+
     def update_image_layer(self, file_name, threshold_lower, threshold_upper):
         channel_map = self.intro_params.get("channel_assignments", [])
         intensity_idx = channel_map.index("Intensity") if "Intensity" in channel_map else 0
@@ -183,7 +211,80 @@ class PhasorWidget(QWidget):
                 self.remove_overlay(mask_layer_name)
         else:
             self.remove_overlay(mask_layer_name)
-        # Apply threshold
+            
+        # --- Apply External Mask Layer if selected ---
+        mask_selection_combo = self.file_selection_widget.file_rows[file_name].get("mask_combo")
+        if mask_selection_combo:
+            selected_mask_name = mask_selection_combo.currentText()
+            if selected_mask_name != "None" and selected_mask_name in self.viewer.layers:
+                mask_layer_obj = self.viewer.layers[selected_mask_name]
+                mask_data = mask_layer_obj.data
+                
+                # Treat non-zero values as 1 (inclusion mask)
+                # Actually, usually mask means "1 is ROI". 
+                # If we want to EXCLUDE pixels that are 0 in the mask:
+                # We add to the 'mask' (which is the exclusion mask for setting to 0).
+                # So if mask_data == 0, we want to exclude.
+                
+                # Broadcasting logic
+                # Target shape: intensity_image.shape
+                # mask_data shape: ?
+                
+                # 1. Binarize
+                binary_ext_mask = (mask_data != 0)
+                
+                # 2. Invert for exclusion (True where we want to set to 0)
+                exclusion_ext_mask = ~binary_ext_mask
+                
+                # 3. Broadcast
+                final_ext_mask = None
+                
+                if exclusion_ext_mask.shape == intensity_image.shape:
+                    final_ext_mask = exclusion_ext_mask
+                elif exclusion_ext_mask.ndim == 2 and intensity_image.ndim == 3:
+                     # Broadcast 2D mask to 3D image
+                     # (H, W) -> (T, H, W)
+                     if exclusion_ext_mask.shape == intensity_image.shape[1:]:
+                         final_ext_mask = np.broadcast_to(exclusion_ext_mask, intensity_image.shape)
+                     else:
+                         print(f"Shape mismatch: Mask {exclusion_ext_mask.shape} vs Image {intensity_image.shape}")
+                elif exclusion_ext_mask.ndim == 3 and intensity_image.ndim == 3:
+                     # Frame mismatch?
+                     if exclusion_ext_mask.shape != intensity_image.shape:
+                         print(f"Frame/Shape mismatch between mask {selected_mask_name} and image {file_name}. Applying anyway as per request.")
+                         # Strategy: If T dim differs, broadcast or loop?
+                         # Safe fallback: apply frame by frame with modulo? 
+                         # Or simpler: if 2D shapes match, use simple broadcasting if T=1
+                         
+                         if exclusion_ext_mask.shape[1:] == intensity_image.shape[1:]:
+                             # Spatial dims match.
+                             if exclusion_ext_mask.shape[0] == 1:
+                                  # Broadcast single frame
+                                  final_ext_mask = np.broadcast_to(exclusion_ext_mask[0], intensity_image.shape)
+                             else:
+                                  # Iterate and assign?
+                                  # Let's create a full size mask
+                                  final_ext_mask = np.zeros(intensity_image.shape, dtype=bool)
+                                  T_img = intensity_image.shape[0]
+                                  T_mask = exclusion_ext_mask.shape[0]
+                                  for t in range(T_img):
+                                      # Use modulo for looping if mask is shorter, or just clamp?
+                                      # "Apply mask to each frame anyway" -> maybe loop if short.
+                                      t_m = t % T_mask
+                                      final_ext_mask[t] = exclusion_ext_mask[t_m]
+                         else:
+                             print("Spatial dimensions mismatch. Cannot apply mask efficiently.")
+                
+                if final_ext_mask is None and exclusion_ext_mask.ndim == intensity_image.ndim:
+                     # Check if shapes match exactly again?
+                     if exclusion_ext_mask.shape == intensity_image.shape:
+                         final_ext_mask = exclusion_ext_mask
+
+                # Combine with threshold mask
+                if final_ext_mask is not None:
+                    mask = np.logical_or(mask, final_ext_mask)
+
+        # Apply threshold (and external mask)
         intensity_image[mask] = 0
         # Copy back into right place in data
         updated_data = original_data.copy()

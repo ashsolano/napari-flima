@@ -47,6 +47,7 @@ class FileSelectionTable(QGroupBox):
 
     threshold_changed = Signal(str, object)  # (file_name, (threshold_value_lower, threshold_value_upper))
     groups_updated = Signal(list)  # Signal to emit updated group list
+    mask_changed = Signal(str, str) # (file_name, mask_layer_name)
 
     def __init__(self, parent=None, title="🛈 &File Selection", font=None):
         super().__init__(title, parent)
@@ -157,8 +158,19 @@ class FileSelectionTable(QGroupBox):
         add_to_phasor_button.clicked.connect(lambda: self.add_group_to_phasor(selected_group=group_select_combo.currentText()))
         self.group_select.addWidget(add_to_phasor_button)
         main_layout.addLayout(self.group_select)
+        
+        # (E) Load Mask Button
+        load_mask_btn = QPushButton("Load Mask File...")
+        load_mask_btn.setFont(self.default_font)
+        load_mask_btn.clicked.connect(self.on_load_mask_clicked)
+        main_layout.addWidget(load_mask_btn)
 
         main_layout.addStretch()
+
+    def on_load_mask_clicked(self):
+        """Handle load mask button click"""
+        if hasattr(self.parent_widget, "load_mask_file"):
+            self.parent_widget.load_mask_file()
 
     def add_group_to_phasor(self, selected_group = "None"):
         """Adds an entire group to the phasor plot
@@ -220,13 +232,33 @@ class FileSelectionTable(QGroupBox):
             # Restore the previously selected text if still valid
             if current_text in self.known_groups:
                 combo.setCurrentText(current_text)
-        group_select_combo = self.group_select.layout().itemAt(1).widget()
+        group_select_combo = self.group_select.layout().itemAt(0).widget()
         current_text = group_select_combo.currentText()
         group_select_combo.clear()
         group_select_combo.addItems(self.known_groups)
         # Restore the previously selected text if still valid
         if current_text in self.known_groups:
             group_select_combo.setCurrentText(current_text)
+
+    def update_mask_choices(self, mask_layers):
+        """Updates the mask combo box items in all file rows
+        
+        :param list mask_layers: list of available mask layer names
+        """
+        self.current_mask_layers = ["None"] + mask_layers
+        
+        for row_info in self.file_rows.values():
+            combo = row_info["mask_combo"]
+            current_text = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(self.current_mask_layers)
+            
+            if current_text in self.current_mask_layers:
+                combo.setCurrentText(current_text)
+            else:
+                combo.setCurrentText("None")
+            combo.blockSignals(False)
                 
     def get_group_list(self):
         """Return the current list of groups"""
@@ -266,7 +298,6 @@ class FileSelectionTable(QGroupBox):
         group_combo.setFont(self.default_font)
         group_combo.setEditable(False)
         group_combo.addItems(self.known_groups)
-        group_combo.setFixedWidth(100)  # align combos
         group_combo.setStyleSheet("""
             QComboBox {
                 background-color: white;
@@ -282,7 +313,34 @@ class FileSelectionTable(QGroupBox):
         """)
         row_layout.addWidget(group_combo)
 
-        # 4) Threshold slider + numeric label
+        # 4) Mask Selector
+        mask_combo = QComboBox()
+        mask_combo.setFont(self.default_font)
+        mask_combo.setEditable(False)
+        mask_combo.setFixedWidth(100)
+        # Populate with current masks if available (tracked in self.current_mask_layers or empty)
+        if hasattr(self, "current_mask_layers"):
+             mask_combo.addItems(self.current_mask_layers)
+        else:
+             mask_combo.addItem("None")
+
+        mask_combo.setStyleSheet("""
+            QComboBox {
+                background-color: white;
+                color: black;
+                border: 1px solid #707070;
+                padding: 5px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: white;
+                selection-background-color: #707070;
+                color: black;
+            }
+        """)
+        mask_combo.currentTextChanged.connect(lambda text, fn=file_name: self.mask_changed.emit(fn, text))
+        row_layout.addWidget(mask_combo)
+
+        # 5) Threshold slider + numeric label
         threshold_layout = QHBoxLayout()
         threshold_layout.setSpacing(2)
         threshold_widget = QWidget()
@@ -345,6 +403,7 @@ class FileSelectionTable(QGroupBox):
             "checkbox": checkbox,
             "file_label": file_label,
             "group_combo": group_combo,
+            "mask_combo": mask_combo,
             "slider": slider,
             "val_low_label": val_low_label,
             "val_high_label": val_high_label,
