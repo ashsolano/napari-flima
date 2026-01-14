@@ -7,7 +7,7 @@ from math import ceil
 from scipy import signal
 
 from napari.utils.colormaps import Colormap
-from qtpy.QtCore import Qt, Signal, QRect, QEvent, QTimer
+from qtpy.QtCore import Qt, Signal, QRect, QEvent, QTimer, QThread
 from qtpy.QtGui import (
     QClipboard, QPixmap, QColor, QStandardItem, QStandardItemModel,
     QPainter, QFont, QBrush, QIcon, QDoubleValidator, QIntValidator

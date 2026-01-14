@@ -8,7 +8,7 @@ from scipy import signal
 from matplotlib.colors import CSS4_COLORS
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from napari.utils.colormaps import Colormap
-from qtpy.QtCore import Qt, Signal, QRect, QEvent, QTimer
+from qtpy.QtCore import Qt, Signal, QRect, QEvent, QTimer, QThread
 from qtpy.QtGui import (
     QClipboard, QPixmap, QColor, QStandardItem, QStandardItemModel,
     QPainter, QFont, QBrush, QIcon, QDoubleValidator, QIntValidator
