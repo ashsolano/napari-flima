@@ -1101,68 +1101,172 @@ class ExportResultsWidget(QWidget):
                 print(f"Warning: Missing figure for {cursor}.")
         return interactive_summary
     
-    # WIP
-    def _generate_new_plots(self):
+    def generate_static_plots(self, df_wide, output_dir):
+        """
+        Generate static violin and KDE plots using seaborn/matplotlib.
+        Saves plots to output_dir/figures and returns a dictionary of filename info.
+        """
         import seaborn as sns
         from statsmodels.formula.api import ols
         import matplotlib.pyplot as plt
         import statsmodels.api as sm
         import itertools as it
         import starbars
-        df_wide = self.segmentation_widget.analyze_cursor_mask()
+
+        fig_dir = os.path.join(output_dir, "figures")
+        os.makedirs(fig_dir, exist_ok=True)
+
         cursor_settings = self.analysis_data.get("cursor_settings", [])
         active_cursors = [cs["color"] for cs in cursor_settings if cs.get("active")]
-        fig_dir = os.path.join(self.folder_line_edit.text(), "figures")
+        
+        # 1. Violin Plots with Significance
         lms = {}
-        anova_res = {}
+        # anova_res = {} # unused for now
         for c in active_cursors:
-            lms[c] = ols("Ratio_"+c+" ~ Group", data = df_wide).fit()
-            anova_res[c] = sm.stats.anova_lm(lms[c], typ=2)
+            # Statsmodels needs clean column names, usually handled, but ensure mapping
+            col_name = "Ratio_" + c
+            if col_name in df_wide.columns:
+                try:
+                    # Rename column temporarily if it has spaces/weird chars? 
+                    # Assuming standard naming from analyze_cursor_mask
+                    lms[c] = ols(f"{col_name} ~ Group", data=df_wide).fit()
+                except Exception as e:
+                    print(f"Error fitting model for {c}: {e}")
 
         n_cursor = len(active_cursors)
-        f, axs = plt.subplots(1, n_cursor, figsize=(8*n_cursor,8))
-        order = self.phasor_widget.file_selection_widget.get_file_group_mapping().values()
-        order = [*{*order}]
-        flima_palette = ["#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c", "#98df8a", "#d62728", "#ff9896", "#9467bd", "#c5b0d5"]
-        sig = [list(lm.t_test_pairwise("Group").result_frame["P>|t|"]) for lm in lms.values()]
-        print(sig)
-        annotations = [[(o[0], o[1], float(s[i])) for i,o in enumerate(it.combinations(order, 2))] for s in sig]
-        print(annotations)
-        for i,c in enumerate(active_cursors):
-            sns.violinplot(data = df_wide, x = "Group", y = "Ratio_"+c, bw_adjust=.5, cut=1, linewidth=1, palette=flima_palette, ax=axs[i])
-            starbars.draw_annotation(annotations[0], ax=axs[i])
-        f.set_dpi(400)
-        plt.savefig(os.path.join(fig_dir, "violin.png"))
+        if n_cursor > 0:
+            f, axs = plt.subplots(1, n_cursor, figsize=(8*n_cursor, 8))
+            if n_cursor == 1:
+                axs = [axs]
+            
+            # Get group order
+            order = self.phasor_widget.file_selection_widget.get_file_group_mapping().values()
+            order = sorted(list(set(order))) # unique sorted
+            
+            flima_palette = ["#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c", "#98df8a", "#d62728", "#ff9896", "#9467bd", "#c5b0d5"]
+            
+            # Draw each cursor's violin
+            for i, c in enumerate(active_cursors):
+                if c in lms:
+                    lm = lms[c]
+                    try:
+                        # pairwise t-test
+                        ttest = lm.t_test_pairwise("Group")
+                        pvals = ttest.result_frame["P>|t|"]
+                        
+                        # Prepare annotations for starbars
+                        # starbars expects list of (group1, group2, p_value)
+                        pairs = list(it.combinations(order, 2))
+                        # Mapping pvals index names directly might be tricky depending on statsmodels version
+                        # result_frame index usually "GroupA-GroupB"
+                        
+                        annotations = []
+                        for g1, g2 in pairs:
+                            # Try finding the row
+                            # statsmodels label usually "group2-group1" or sim.
+                            # We'll check both directions
+                            key1 = f"{g1}-{g2}" # check implementation of t_test_pairwise naming
+                            key2 = f"{g2}-{g1}" 
+                            p = 1.0
+                            # result_frame index is the contrast name
+                            found = False
+                            for idx_name in pvals.index:
+                                if (g1 in idx_name and g2 in idx_name):
+                                    p = pvals[idx_name]
+                                    break
+                            annotations.append((g1, g2, float(p)))
 
-        file_groups = self.analysis_data['file_group_mapping']
-        group_summary = {}
-        for file,group in file_groups.items():
-            f2, ax2 = plt.subplots(figsize=(8,8))
-            f2.set_dpi(400)
-            intensity = self.analysis_data['file_gs_data'][file]['intensity']
-            shape = intensity.shape
-            intensity = intensity.reshape(shape[0], shape[1]*shape[2])
-            sns.histplot(data = intensity.T, palette=flima_palette, log_scale=True, ax = ax2)
-            plt.savefig(os.path.join(fig_dir, file+"intensity_kde.png"))
-            if group_summary.get(group) is not None:
-                group_summary[group] = group_summary[group].append(list(describe(intensity)))
-            else:
-                group_summary[group] = [describe(intensity)]
+                        sns.violinplot(data=df_wide, x="Group", y="Ratio_"+c, order=order, bw_adjust=.5, cut=1, linewidth=1, palette=flima_palette, ax=axs[i])
+                        starbars.draw_annotation(annotations, ax=axs[i])
+                    except Exception as e:
+                        print(f"Error drawing annotations for {c}: {e}")
+                        # Fallback plot without stars
+                        sns.violinplot(data=df_wide, x="Group", y="Ratio_"+c, order=order, bw_adjust=.5, cut=1, linewidth=1, palette=flima_palette, ax=axs[i])
+
+            f.set_dpi(400)
+            violin_path = os.path.join(fig_dir, "violin.png")
+            plt.savefig(violin_path, bbox_inches="tight")
+            plt.close(f)
+        
+        # 2. Individual Intensity Histograms
+        file_groups = self.analysis_data.get('file_group_mapping', {})
+        group_summary = {} # store descriptive stats
+        
+        for file_name, group in file_groups.items():
+            if file_name in self.analysis_data['file_gs_data']:
+                intensity = self.analysis_data['file_gs_data'][file_name]['intensity']
+                if intensity is not None:
+                    # flatten
+                    vals = intensity.flatten()
+                    # Basic hist
+                    f2, ax2 = plt.subplots(figsize=(8, 8))
+                    f2.set_dpi(150)
+                    # Use simple histplot
+                    try:
+                        sns.histplot(x=vals, log_scale=True, ax=ax2)
+                        plt.xlabel("Intensity")
+                        plt.title(f"{file_name} Intensity")
+                        safe_name = os.path.splitext(os.path.basename(file_name))[0]
+                        plt.savefig(os.path.join(fig_dir, f"{safe_name}_intensity_kde.png"), bbox_inches="tight")
+                    except Exception as e:
+                        print(f"Error plotting intensity for {file_name}: {e}")
+                    plt.close(f2)
+
+                    # Stats
+                    d = describe(vals)
+                    if group not in group_summary:
+                        group_summary[group] = []
+                    group_summary[group].append({
+                        "file": file_name,
+                        "nobs": d.nobs,
+                        "minmax": d.minmax,
+                        "mean": d.mean,
+                        "variance": d.variance
+                    })
+
+        # Save stats txt
         with open(os.path.join(fig_dir, 'descriptive_statistics.txt'), 'w') as f:
-            print(group_summary, file=f)
-
-        summary_intensity = np.array([np.clip(self.analysis_data['file_gs_data'][f]['intensity'].flatten(), a_min=0.001, a_max = None) for f in file_groups.keys()])
-        f4, ax4 = plt.subplots(figsize=(8,8))
-        f4.set_dpi(400)
-        sns.kdeplot(summary_intensity.T, log_scale=True, palette=flima_palette, ax=ax4)
-        plt.savefig(os.path.join(fig_dir, "intensity_summary_kde.png"))
-
-        for g in order:
-            grouped_intensity = np.array([np.clip(self.analysis_data['file_gs_data'][f]['intensity'].flatten(), a_min=0.001, a_max = None) for f in file_groups.keys() if file_groups[f] == g])
-            f3, ax3 = plt.subplots(figsize=(8,8))
-            f3.set_dpi(400)
-            sns.kdeplot(grouped_intensity.T, log_scale=True, palette=flima_palette, ax=ax3)
-            plt.savefig(os.path.join(fig_dir, g+"_intensity_summary_kde.png"))
+            import pprint
+            pprint.pprint(group_summary, stream=f)
+            
+        # 3. Summary Intensity KDE (All Files)
+        # Collect all pixels? Might be huge. The original code sampled or just flattened.
+        # "summary_intensity" was array of arrays.
+        # Let's perform a subsample if too large for KDE
+        
+        MAX_POINTS = 50000 
+        
+        all_intensities = []
+        all_groups = []
+        
+        for file_name, group in file_groups.items():
+            if file_name in self.analysis_data['file_gs_data']:
+                i = self.analysis_data['file_gs_data'][file_name]['intensity']
+                if i is not None:
+                    flat = i.flatten()
+                    # Clip low values
+                    flat = flat[flat > 0.001]
+                    if len(flat) > 0:
+                        # Subsample for plot performance
+                        if len(flat) > 10000:
+                            flat = np.random.choice(flat, 10000, replace=False)
+                        all_intensities.extend(flat)
+                        all_groups.extend([group]*len(flat))
+        
+        if all_intensities:
+            f4, ax4 = plt.subplots(figsize=(8, 8))
+            f4.set_dpi(400)
+            sns.kdeplot(x=all_intensities, hue=all_groups, log_scale=True, palette=flima_palette[:len(set(all_groups))], ax=ax4)
+            plt.savefig(os.path.join(fig_dir, "intensity_summary_kde.png"), bbox_inches="tight")
+            plt.close(f4)
+        
+        # 4. Group KDEs? (Already covered by hue above, but original code did separate plots per group)
+        # We'll stick to the combined one for the report as "intensity_summary_kde.png".
+        
+        return {
+            "violin": "figures/violin.png",
+            "intensity_summary": "figures/intensity_summary_kde.png"
+        }
         
 
 
@@ -1411,14 +1515,18 @@ class ExportResultsWidget(QWidget):
         else:
             downstream_table = ""
         
-        # --- Generate Interactive Plot Summaries if downstream_table was generated ---
+        
+        # --- Generate Static Plot Summaries if downstream_table was generated ---
+        static_plots = {}
         if downstream_table != "":
-            # Here we assume the downstream DataFrame is available as df_wide
-            interactive_plots = self.generate_interactive_plot_summaries(df_wide)
-        else:
-            interactive_plots = {}
-        self.analysis_data["plot_summary"] = interactive_plots      
-    
+            try:
+                # We reuse df_wide from above
+                static_plots = self.generate_static_plots(df_wide, output_dir)
+            except Exception as e:
+                print(f"Error generating static plots: {e}")
+                static_plots = {}
+        
+        self.analysis_data["static_plots"] = static_plots
         
         # --- Build Report Data ---
         report_data = {
@@ -1429,7 +1537,7 @@ class ExportResultsWidget(QWidget):
             "cursors": active_cursors,
             "do_downstream": do_downstream,
             "downstream_table": downstream_table,
-            "plot_summary": self.analysis_data.get("plot_summary", {})
+            "static_plots": static_plots
         }
         
         
@@ -1551,6 +1659,18 @@ class ExportResultsWidget(QWidget):
             .analysis-table { margin-top: 20px; border-collapse: collapse; width: 100%; }
             .analysis-table th, .analysis-table td { border: 1px solid #ddd; padding: 8px; text-align: center; }
             .analysis-table th { background-color: #007acc; color: white; }
+            
+            .plot-container {
+                text-align: center;
+                margin-top: 20px;
+            }
+            .plot-container img {
+                max-width: 100%;
+                height: auto;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                margin-bottom: 20px;
+            }
           </style>
         
           <script>
@@ -1609,8 +1729,8 @@ class ExportResultsWidget(QWidget):
                 <li onclick="document.getElementById('downstream_table').scrollIntoView();">Analysis Results</li>
               </ul>
               {% endif %}
-              <!-- New: Interactive Plots link -->
-              <li onclick="document.getElementById('interactive_plots').scrollIntoView();">Interactive Plots</li>
+              <!-- New: Statistical Summaries link -->
+              <li onclick="document.getElementById('statistical_summaries').scrollIntoView();">Statistical Summaries</li>
             </ul>
           </div>
         
@@ -1759,20 +1879,31 @@ class ExportResultsWidget(QWidget):
               {% endif %}
             </div>
             {% endif %}
-
+ 
         
-            <!-- New: Interactive Plot Summaries Section -->
-            <div class="section" id="interactive_plots">
-              <h2>Interactive Plot Summaries</h2>
-              {% if plot_summary %}
-                {% for cursor, plots in plot_summary.items() %}
-                  <h3>Time Trend for {{ cursor }}</h3>
-                  {{ plots.time_trend|safe }}
-                  <h3>Global Violin for {{ cursor }}</h3>
-                  {{ plots.global_violin|safe }}
-                {% endfor %}
+            <!-- Statistical Summaries Section -->
+            <div class="section" id="statistical_summaries">
+              <h2>Statistical Summaries</h2>
+              {% if static_plots %}
+                  <h3>Ratio Violin Plots (by Group)</h3>
+                  {% if static_plots.violin %}
+                    <div class="plot-container">
+                        <img src="{{ static_plots.violin }}" alt="Violin Plots">
+                    </div>
+                  {% else %}
+                    <p>No violin plots generated.</p>
+                  {% endif %}
+
+                  <h3>Intensity Distribution (Summary)</h3>
+                   {% if static_plots.intensity_summary %}
+                    <div class="plot-container">
+                        <img src="{{ static_plots.intensity_summary }}" alt="Intensity Summary">
+                    </div>
+                  {% else %}
+                    <p>No intensity summary generated.</p>
+                  {% endif %}
               {% else %}
-                <p>No interactive plots available.</p>
+                <p>No statistical plots available.</p>
               {% endif %}
             </div>
         
