@@ -254,8 +254,11 @@ class PhasorWidget(QWidget):
     def on_checkbox_state_changed(self, state, file_name):
         """
         When a file's checkbox is toggled:
-         - If checked: compute g/s coordinates, lifetimes, etc. in a background thread.
-         - If unchecked: remove the file's entry.
+         - If checked: compute g/s coordinates, lifetimes, etc., and add this file's data 
+           to self.file_gs_data so that replot_phasor() uses it; also update lifetime layer.
+         - If unchecked: remove the file's entry from self.file_gs_data so that its g/s data
+           no longer appear in the phasor plot. The lifetime layer and cursor mask layer remain 
+           for later reference.
         """
         if state == Qt.Checked:
             QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -269,19 +272,26 @@ class PhasorWidget(QWidget):
             intro_params = self.intro_params.copy()
 
             # Create worker and thread
-            self.thread = QThread()
-            self.worker = Worker(self.run_phasor_calculation, layer_data, intro_params, current_mask)
-            self.worker.moveToThread(self.thread)
+            thread = QThread()
+            worker = Worker(self.run_phasor_calculation, layer_data, intro_params, current_mask)
+            worker.moveToThread(thread)
             
+            # Store references to prevent garbage collection
+            if not hasattr(self, "_threads"):
+                self._threads = {}
+            self._threads[file_name] = (thread, worker)
+
             # Connect signals
-            self.thread.started.connect(self.worker.run)
-            self.worker.result.connect(partial(self.on_phasor_result, file_name=file_name, current_mask=current_mask))
-            self.worker.finished.connect(self.thread.quit)
-            self.worker.finished.connect(self.worker.deleteLater)
-            self.thread.finished.connect(self.thread.deleteLater)
-            self.thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
+            thread.started.connect(worker.run)
+            worker.result.connect(partial(self.on_phasor_result, file_name=file_name, current_mask=current_mask))
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            # Cleanup storage when thread finishes
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(lambda: self._cleanup_thread(file_name))
+            thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
             
-            self.thread.start()
+            thread.start()
 
         else:
             # If unchecked, remove this file's g/s data from phasor plotting.
@@ -326,7 +336,7 @@ class PhasorWidget(QWidget):
             "intensity": intensity,
             "g_image": g_image,
             "s_image": s_image,
-            "tau_av": tau_av
+                "tau_av": tau_av  # for display if needed
         }
         self.intensity = intensity
         self.g = g_image
@@ -391,6 +401,10 @@ class PhasorWidget(QWidget):
 
 
      
+    def _cleanup_thread(self, key):
+        if hasattr(self, "_threads") and key in self._threads:
+            del self._threads[key]
+
     # def replot_phasor(self):
     #     """
     #     Replot the phasor dialog by timepoint, overlaying every checked file.
@@ -673,18 +687,24 @@ class PhasorWidget(QWidget):
         # We pass a copy/extraction of relevant data to minimize side effects, 
         # though passing file_gs_data dict (keys + pointers to arrays) is generally okay for read-access
         # but let's be explicit if possible. here we just pass the dict.
-        self.thread_filter = QThread()
-        self.worker_filter = Worker(self.run_median_filter_processing, self.file_gs_data, nsmoothing)
-        self.worker_filter.moveToThread(self.thread_filter)
+        thread = QThread()
+        worker = Worker(self.run_median_filter_processing, self.file_gs_data, nsmoothing)
+        worker.moveToThread(thread)
         
-        self.thread_filter.started.connect(self.worker_filter.run)
-        self.worker_filter.result.connect(self.on_median_filter_result)
-        self.worker_filter.finished.connect(self.thread_filter.quit)
-        self.worker_filter.finished.connect(self.worker_filter.deleteLater)
-        self.thread_filter.finished.connect(self.thread_filter.deleteLater)
-        self.thread_filter.finished.connect(lambda: QApplication.restoreOverrideCursor())
+        # Store ref
+        if not hasattr(self, "_threads"):
+            self._threads = {}
+        self._threads['median_filter'] = (thread, worker)
+
+        thread.started.connect(worker.run)
+        worker.result.connect(self.on_median_filter_result)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._cleanup_thread('median_filter'))
+        thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
         
-        self.thread_filter.start()
+        thread.start()
 
     @staticmethod
     def run_median_filter_processing(file_gs_data, nsmoothing):

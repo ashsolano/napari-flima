@@ -317,19 +317,28 @@ class SegmentationParametersWidget(QWidget):
             return
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
-        self.thread = QThread()
-        self.worker = Worker(
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        thread = QThread()
+        worker = Worker(
             self.run_segmentation_processing,
             file_intensity_map, min_size, threshold, iou_threshold, dist_threshold, min_persistence
         )
-        self.worker.moveToThread(self.thread)
-        self.thread.started.connect(self.worker.run)
-        self.worker.result.connect(self.on_segmentation_result)
-        self.worker.finished.connect(self.thread.quit)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self.thread.deleteLater)
-        self.thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
-        self.thread.start()
+        worker.moveToThread(thread)
+        
+        # Store ref
+        if not hasattr(self, "_threads"):
+            self._threads = {}
+        self._threads['segmentation'] = (thread, worker)
+
+        thread.started.connect(worker.run)
+        worker.result.connect(self.on_segmentation_result)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._cleanup_thread('segmentation'))
+        thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
+        
+        thread.start()
 
     @staticmethod
     def run_segmentation_processing(file_intensity_map, min_size, threshold, iou_threshold, dist_threshold, min_persistence):
@@ -356,6 +365,10 @@ class SegmentationParametersWidget(QWidget):
             colored_masks = np.expand_dims(colored_masks, axis=1)
             results[file_name] = (seg_masks, colored_masks)
         return results
+
+    def _cleanup_thread(self, key):
+        if hasattr(self, "_threads") and key in self._threads:
+            del self._threads[key]
 
     def on_segmentation_result(self, results):
         for file_name, (seg_masks, colored_masks) in results.items():
