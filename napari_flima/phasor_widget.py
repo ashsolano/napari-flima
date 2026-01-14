@@ -334,25 +334,6 @@ class PhasorWidget(QWidget):
         image_layer.data = updated_data
         image_layer.refresh()
         self.current_mask = mask
-        # Overlay positioning logic as before...
-        if mask_layer_name in self.viewer.layers:
-            overlay_layer = self.viewer.layers[mask_layer_name]
-            if self.viewer.grid.enabled:
-                if hasattr(image_layer, "metadata") and "grid" in image_layer.metadata:
-                    overlay_layer.metadata = overlay_layer.metadata or {}
-                    overlay_layer.metadata["grid"] = image_layer.metadata["grid"]
-                else:
-                    try:
-                        idx = self.file_order.index(file_name)
-                    except ValueError:
-                        idx = 0
-                    overlay_layer.metadata = overlay_layer.metadata or {}
-                    overlay_layer.metadata["grid"] = (0, idx)
-            else:
-                self._bring_to_top(image_layer, overlay_layer)
-
-    
-   
     
     def _create_or_update_overlay(self, layer_name, rgba_mask):
         """Helper to create or update an overlay layer with the given name."""
