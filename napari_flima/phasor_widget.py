@@ -191,7 +191,7 @@ class PhasorWidget(QWidget):
             return
         original_data = self.file_selection_widget.file_rows[file_name]["layer_data"]
         checkbox_checked = self.file_selection_widget.file_rows[file_name]["checkbox"].isChecked()
-        mask_layer_name = file_name + "_mask"
+        # mask_layer_name = file_name + "_mask" # Deprecated single name
     
         # --- Universal thresholding logic ---
         intensity_image = extract_channel(original_data, intensity_idx)
@@ -208,6 +208,8 @@ class PhasorWidget(QWidget):
 
         # --- Apply External Mask Layer if selected ---
         mask_selection_combo = self.file_selection_widget.file_rows[file_name].get("mask_combo")
+        binary_ext_mask = None # for blue overlay
+        
         if mask_selection_combo:
             selected_mask_name = mask_selection_combo.currentText()
             if selected_mask_name != "None" and selected_mask_name in self.viewer.layers:
@@ -215,36 +217,25 @@ class PhasorWidget(QWidget):
                 mask_data = mask_layer_obj.data
                 
                 # Treat non-zero values as 1 (inclusion mask)
-                # Usually mask means "1 is ROI". 
-                # If we want to EXCLUDE pixels that are 0 in the mask:
-                # We add to the 'mask' (which is the exclusion mask for setting to 0).
-                # So if mask_data == 0, we want to exclude.
-                
-                # Broadcasting logic
-                # Target shape: intensity_image.shape
-                
-                # 1. Binarize
+                # Binarize and invert for exclusion (True where we want to set to 0)
                 binary_ext_mask = (mask_data != 0)
-                
-                # 2. Invert for exclusion (True where we want to set to 0)
                 exclusion_ext_mask = ~binary_ext_mask
                 
-                # 3. Broadcast
                 final_ext_mask = None
                 
+                # Broadcasting logic
                 if exclusion_ext_mask.shape == intensity_image.shape:
                     final_ext_mask = exclusion_ext_mask
                 elif exclusion_ext_mask.ndim == 2 and intensity_image.ndim == 3:
-                     # Broadcast 2D mask to 3D image
-                     # (H, W) -> (T, H, W)
+                     # Broadcast 2D mask to 3D image: (H, W) -> (T, H, W)
                      if exclusion_ext_mask.shape == intensity_image.shape[1:]:
                          final_ext_mask = np.broadcast_to(exclusion_ext_mask, intensity_image.shape)
                      else:
                          print(f"Shape mismatch: Mask {exclusion_ext_mask.shape} vs Image {intensity_image.shape}")
                 elif exclusion_ext_mask.ndim == 3 and intensity_image.ndim == 3:
-                     # Frame mismatch?
+                     # Frame mismatch handling
                      if exclusion_ext_mask.shape != intensity_image.shape:
-                         print(f"Frame/Shape mismatch between mask {selected_mask_name} and image {file_name}. Applying anyway as per request.")
+                         print(f"Frame/Shape mismatch between mask {selected_mask_name} and image {file_name}. Applying anyway by cycling frames.")
                          
                          if exclusion_ext_mask.shape[1:] == intensity_image.shape[1:]:
                              # Spatial dims match.
@@ -252,7 +243,7 @@ class PhasorWidget(QWidget):
                                   # Broadcast single frame
                                   final_ext_mask = np.broadcast_to(exclusion_ext_mask[0], intensity_image.shape)
                              else:
-                                  # Iterate and assign?
+                                  # Iterate and cycle frames if needed
                                   final_ext_mask = np.zeros(intensity_image.shape, dtype=bool)
                                   T_img = intensity_image.shape[0]
                                   T_mask = exclusion_ext_mask.shape[0]
@@ -263,7 +254,7 @@ class PhasorWidget(QWidget):
                              print("Spatial dimensions mismatch. Cannot apply mask efficiently.")
                 
                 if final_ext_mask is None and exclusion_ext_mask.ndim == intensity_image.ndim:
-                     # Check if shapes match exactly again?
+                     # Fallback exact shape check
                      if exclusion_ext_mask.shape == intensity_image.shape:
                          final_ext_mask = exclusion_ext_mask
 
@@ -277,16 +268,53 @@ class PhasorWidget(QWidget):
         else:
             mask0 = mask
 
+        # Prepare blue inclusion mask (frame 0) - "Show binary mask in blue"
+        blue_mask0 = None
+        if binary_ext_mask is not None:
+             # binary_ext_mask might be 2D or 3D. 
+             # We want the *broadcasted* version if possible, or just the frame 0.
+             # Actually, final_ext_mask is the EXCLUSION mask. 
+             # The inclusion mask is ~final_ext_mask (roughly, assuming exact broadcasting).
+             # Let's derive blue_mask0 from final_ext_mask if it exists (which is broadcasted exclusion).
+             if final_ext_mask is not None:
+                 if final_ext_mask.ndim == 3:
+                     blue_mask0 = ~final_ext_mask[0] # Inclusion = Not Excluded
+                 else:
+                     blue_mask0 = ~final_ext_mask
+             elif binary_ext_mask is not None:
+                 # Fallback to the raw binary mask frame 0
+                 if binary_ext_mask.ndim == 3:
+                     blue_mask0 = binary_ext_mask[0]
+                 else:
+                     blue_mask0 = binary_ext_mask
+
+        # Overlay Logic
+        mask_layer_red = file_name + "_mask_red"   # "All exclusions"
+        mask_layer_blue = file_name + "_mask_blue" # "Binary mask"
+
         if not checkbox_checked:
-            rgba_mask = np.zeros(mask0.shape + (4,), dtype=np.uint8)
-            rgba_mask[mask0, 0] = 255
-            rgba_mask[mask0, 3] = 128
+            # 1. Red Overlay (Exclusion)
+            rgba_red = np.zeros(mask0.shape + (4,), dtype=np.uint8)
+            rgba_red[mask0, 0] = 255 # R
+            rgba_red[mask0, 3] = 128 # A
+            
             if mask0.sum() > 0:
-                overlay = self._create_or_update_overlay(mask_layer_name, rgba_mask)
+                self._create_or_update_overlay(mask_layer_red, rgba_red)
             else:
-                self.remove_overlay(mask_layer_name)
+                self.remove_overlay(mask_layer_red)
+
+            # 2. Blue Overlay (Inclusion / Binary Mask)
+            if blue_mask0 is not None and blue_mask0.sum() > 0:
+                rgba_blue = np.zeros(blue_mask0.shape + (4,), dtype=np.uint8)
+                rgba_blue[blue_mask0, 2] = 255 # B
+                rgba_blue[blue_mask0, 3] = 128 # A
+                self._create_or_update_overlay(mask_layer_blue, rgba_blue)
+            else:
+                self.remove_overlay(mask_layer_blue)
+
         else:
-            self.remove_overlay(mask_layer_name)
+            self.remove_overlay(mask_layer_red)
+            self.remove_overlay(mask_layer_blue)
             
         # Apply threshold (and external mask)
         intensity_image[mask] = 0
@@ -356,8 +384,14 @@ class PhasorWidget(QWidget):
     
     def slider_released(self, file_name):
         """Called when the slider is released; remove the red overlay for that file."""
-        mask_layer_name = file_name + "_mask"
-        QTimer.singleShot(0, lambda: self.remove_overlay(mask_layer_name))
+        mask_layer_red = file_name + "_mask_red"
+        mask_layer_blue = file_name + "_mask_blue"
+        # Also remove legacy name just in case
+        legacy_name = file_name + "_mask"
+        
+        QTimer.singleShot(0, lambda: self.remove_overlay(mask_layer_red))
+        QTimer.singleShot(0, lambda: self.remove_overlay(mask_layer_blue))
+        QTimer.singleShot(0, lambda: self.remove_overlay(legacy_name))
         
         # Trigger phasor recalculation if checked
         if file_name in self.file_selection_widget.file_rows:
