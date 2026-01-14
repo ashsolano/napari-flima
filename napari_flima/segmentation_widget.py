@@ -34,6 +34,10 @@ from bokeh.resources import CDN
 
 # generalise logo path 
 from napari_flima import get_logo_path
+from .utils import Worker
+from qtpy.QtCore import QThread, Qt
+from qtpy.QtWidgets import QApplication
+from functools import partial
 
 
 # ------------------- BACKEND FUNCTIONS -------------------
@@ -290,10 +294,11 @@ class SegmentationParametersWidget(QWidget):
             print("No analysis data available from the phasor widget.")
             return
 
+        # Prepare intensity map
+        file_intensity_map = {}
         file_keys = list(self.analysis_data["file_gs_data"].keys())
         for file_name in file_keys:
             data = self.analysis_data["file_gs_data"][file_name]
-            # Retrieve the thresholded intensity data.
             intensity = data.get("intensity")
             if intensity is None:
                 for layer in self.viewer.layers:
@@ -305,13 +310,38 @@ class SegmentationParametersWidget(QWidget):
                 if intensity is None:
                     print(f"No intensity data for {file_name}.")
                     continue
+            file_intensity_map[file_name] = intensity
 
+        if not file_intensity_map:
+            print("No valid intensity data found for any file.")
+            return
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.thread = QThread()
+        self.worker = Worker(
+            self.run_segmentation_processing,
+            file_intensity_map, min_size, threshold, iou_threshold, dist_threshold, min_persistence
+        )
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.result.connect(self.on_segmentation_result)
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+        self.thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
+        self.thread.start()
+
+    @staticmethod
+    def run_segmentation_processing(file_intensity_map, min_size, threshold, iou_threshold, dist_threshold, min_persistence):
+        results = {}
+        for file_name, intensity in file_intensity_map.items():
+            # segment_and_track is imported from global scope
             seg_masks, color_map = segment_and_track(
                 intensity, min_size, threshold, iou_threshold, dist_threshold
             )
-            #print(f"File: {file_name} - Tracked Masks Unique Labels:", np.unique(seg_masks))
-            self.segmentation_results[file_name] = seg_masks  # store the label image for later use
-
+            
+            # Use seg_masks for later use
+            # Calculate colored masks
             formatted_colors = {
                 i: tuple(color_map[i]) if i in color_map else (1, 0, 0)
                 for i in np.unique(seg_masks) if i > 0
@@ -324,7 +354,13 @@ class SegmentationParametersWidget(QWidget):
                 for frame in seg_masks
             ])
             colored_masks = np.expand_dims(colored_masks, axis=1)
-            
+            results[file_name] = (seg_masks, colored_masks)
+        return results
+
+    def on_segmentation_result(self, results):
+        for file_name, (seg_masks, colored_masks) in results.items():
+            self.segmentation_results[file_name] = seg_masks
+
             # Use the base layer’s scale and translate.
             if self.viewer.layers:
                 base_layer = self.viewer.layers[0]
@@ -353,7 +389,8 @@ class SegmentationParametersWidget(QWidget):
                     translate=translate,
                     metadata={"source_file": file_name}
                 )
-            #print(f"Added/Updated tracked objects layer: {objects_layer_name}")
+        #print("Segmentation finished.")
+
         
         if self.analysis_data is not None:
             self.analysis_data["segmentation_results"] = self.segmentation_results

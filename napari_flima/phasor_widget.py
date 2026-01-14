@@ -29,7 +29,7 @@ from .file_selection_table import FileSelectionTable
 from .cursor_analysis import CursorAnalysisWidget
 
 from .utils import (
-    extract_channel, ColorSelectorApp, PlotCanvas
+    extract_channel, ColorSelectorApp, PlotCanvas, Worker
 )
 
 #------------------------------------------------------------------------------
@@ -254,108 +254,35 @@ class PhasorWidget(QWidget):
     def on_checkbox_state_changed(self, state, file_name):
         """
         When a file's checkbox is toggled:
-         - If checked: compute g/s coordinates, lifetimes, etc., and add this file's data 
-           to self.file_gs_data so that replot_phasor() uses it; also update lifetime layer.
-         - If unchecked: remove the file's entry from self.file_gs_data so that its g/s data
-           no longer appear in the phasor plot. The lifetime layer and cursor mask layer remain 
-           for later reference.
+         - If checked: compute g/s coordinates, lifetimes, etc. in a background thread.
+         - If unchecked: remove the file's entry.
         """
-        QApplication.setOverrideCursor(Qt.WaitCursor)
         if state == Qt.Checked:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
             threshold_value = self.file_selection_widget.file_rows[file_name]["slider"].value()
             self.update_threshold(file_name, threshold_value)
+            
+            # Prepare data for worker
             layer_data = self.file_selection_widget.file_rows[file_name]["layer_data"]
-    
-            # Compute intensity, g, and s arrays.
-            intensity, g_image, s_image = self.calculate_g_s_coordinates(
-                layer_data,
-                self.intro_params.get("laser_frequency", 0),
-                self.intro_params.get("harmonic", 1),
-                zero_indices=self.current_mask  # assuming update_threshold stored the mask here
-            )
-    
-            # Compute lifetimes.
-            #print("Begin computing lifetime values")
-            tau_m, tau_p, tau_av = self.compute_lifetimes_from_gs(g_image, s_image)
-            #print("Complete lifetime value calculations")
-    
-            # Apply threshold mask to the lifetime arrays as before...
-            if self.current_mask is not None:
-                try:
-                    if tau_m.ndim == self.current_mask.ndim:
-                        tau_m[self.current_mask] = np.nan
-                        tau_p[self.current_mask] = np.nan
-                        tau_av[self.current_mask] = np.nan
-                    elif tau_m.ndim == 2 and self.current_mask.ndim == 3:
-                        tau_m[0][self.current_mask[0]] = np.nan
-                        tau_p[0][self.current_mask[0]] = np.nan
-                        tau_av[0][self.current_mask[0]] = np.nan
-                except Exception as e:
-                    print("Error applying threshold mask to lifetime images:", e)
-    
-            # Store computed g/s (and lifetime) data for phasor plotting.
-            self.file_gs_data[file_name] = {
-                "intensity": intensity,
-                "g_image": g_image,
-                "s_image": s_image,
-                "tau_av": tau_av  # for display if needed
-            }
-            self.intensity = intensity
-            self.g = g_image
-            self.s = s_image
-    
-            # Update or add the lifetime layer.
-            base_name = os.path.splitext(os.path.basename(file_name))[0]
-            tau_av_layer_name = f"{base_name}_lifetime"
-            try:
-                min_tau_av = np.nanpercentile(tau_av, 1)
-                max_tau_av = np.nanpercentile(tau_av, 99)
-            except Exception as e:
-                print("Error computing percentiles for tau_av:", e)
-                min_tau_av, max_tau_av = np.nanmin(tau_av), np.nanmax(tau_av)
-    
-            # Prepare the data for display.
-            if tau_av.ndim == 2:
-                tau_av_disp = np.expand_dims(np.expand_dims(tau_av, axis=0), axis=0)
-            elif tau_av.ndim == 3:
-                tau_av_disp = np.expand_dims(tau_av, axis=1)
-            else:
-                tau_av_disp = tau_av
-    
-            if tau_av_layer_name in self.viewer.layers:
-                layer = self.viewer.layers[tau_av_layer_name]
-                layer.data = tau_av_disp
-            else:
-                layer = self.viewer.add_image(
-                    tau_av_disp,
-                    name=tau_av_layer_name,
-                    colormap="turbo",
-                    contrast_limits=(min_tau_av, max_tau_av)
-                )
-    
-            # 1) Hide the lifetime layer by default
-            layer.visible = False
-    
-            # 2) Move the lifetime layer so it sits just above the base image
-            base_idx = None
-            for i, lay in enumerate(self.viewer.layers):
-                if (hasattr(lay, "source") and lay.source.path is not None
-                    and os.path.basename(lay.source.path) == os.path.basename(file_name)):
-                    base_idx = i
-                    break
-    
-            if base_idx is not None:
-                lifetime_idx = self.viewer.layers.index(layer)
-                # If the lifetime layer is below the base image, move it above
-                if lifetime_idx < base_idx:
-                    self.viewer.layers.move(lifetime_idx, base_idx + 1)
-    
-            # Keep the lifetime layer permanently (store it if needed).
-            self.lifetime_layers[file_name] = layer
-    
-            # Set the current file to this file.
-            self.current_file = file_name
-    
+            current_mask = self.current_mask.copy() if self.current_mask is not None else None
+            # Copy intro_params to ensure thread safety (shallow copy is usually enough for dict of primitives)
+            intro_params = self.intro_params.copy()
+
+            # Create worker and thread
+            self.thread = QThread()
+            self.worker = Worker(self.run_phasor_calculation, layer_data, intro_params, current_mask)
+            self.worker.moveToThread(self.thread)
+            
+            # Connect signals
+            self.thread.started.connect(self.worker.run)
+            self.worker.result.connect(partial(self.on_phasor_result, file_name=file_name, current_mask=current_mask))
+            self.worker.finished.connect(self.thread.quit)
+            self.worker.finished.connect(self.worker.deleteLater)
+            self.thread.finished.connect(self.thread.deleteLater)
+            self.thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
+            
+            self.thread.start()
+
         else:
             # If unchecked, remove this file's g/s data from phasor plotting.
             if file_name in self.file_gs_data:
@@ -366,12 +293,102 @@ class PhasorWidget(QWidget):
                     self.current_file = list(self.file_gs_data.keys())[0]
                 else:
                     self.current_file = None
-            # (Lifetime layer and cursor mask layer remain, so that analysis persists.)
-            #print(f"File {file_name} unticked; lifetime layer and cursor mask are kept.")
-    
+            
+            self.replot_phasor()
+
+    @staticmethod
+    def run_phasor_calculation(layer_data, intro_params, current_mask):
+        intensity, g_image, s_image, orig_g, orig_s = PhasorWidget.calculate_g_s_coordinates(
+            layer_data, intro_params, zero_indices=current_mask
+        )
+        tau_m, tau_p, tau_av = PhasorWidget.compute_lifetimes_from_gs(g_image, s_image, intro_params)
+        return intensity, g_image, s_image, orig_g, orig_s, tau_m, tau_p, tau_av
+
+    def on_phasor_result(self, result, file_name, current_mask):
+        intensity, g_image, s_image, orig_g, orig_s, tau_m, tau_p, tau_av = result
+        
+        # Apply threshold mask to the lifetime arrays
+        if current_mask is not None:
+            try:
+                if tau_m.ndim == current_mask.ndim:
+                    tau_m[current_mask] = np.nan
+                    tau_p[current_mask] = np.nan
+                    tau_av[current_mask] = np.nan
+                elif tau_m.ndim == 2 and current_mask.ndim == 3:
+                    tau_m[0][current_mask[0]] = np.nan
+                    tau_p[0][current_mask[0]] = np.nan
+                    tau_av[0][current_mask[0]] = np.nan
+            except Exception as e:
+                print("Error applying threshold mask to lifetime images:", e)
+
+        # Store computed g/s (and lifetime) data for phasor plotting.
+        self.file_gs_data[file_name] = {
+            "intensity": intensity,
+            "g_image": g_image,
+            "s_image": s_image,
+            "tau_av": tau_av
+        }
+        self.intensity = intensity
+        self.g = g_image
+        self.s = s_image
+        self.original_g = orig_g
+        self.original_s = orig_s
+
+        # Update or add the lifetime layer.
+        base_name = os.path.splitext(os.path.basename(file_name))[0]
+        tau_av_layer_name = f"{base_name}_lifetime"
+        try:
+            min_tau_av = np.nanpercentile(tau_av, 1)
+            max_tau_av = np.nanpercentile(tau_av, 99)
+        except Exception as e:
+            # print("Error computing percentiles for tau_av:", e)
+            min_tau_av, max_tau_av = np.nanmin(tau_av), np.nanmax(tau_av)
+
+        # Prepare the data for display.
+        if tau_av.ndim == 2:
+            tau_av_disp = np.expand_dims(np.expand_dims(tau_av, axis=0), axis=0)
+        elif tau_av.ndim == 3:
+            tau_av_disp = np.expand_dims(tau_av, axis=1)
+        else:
+            tau_av_disp = tau_av
+
+        if tau_av_layer_name in self.viewer.layers:
+            layer = self.viewer.layers[tau_av_layer_name]
+            layer.data = tau_av_disp
+        else:
+            layer = self.viewer.add_image(
+                tau_av_disp,
+                name=tau_av_layer_name,
+                colormap="turbo",
+                contrast_limits=(min_tau_av, max_tau_av)
+            )
+
+        # 1) Hide the lifetime layer by default
+        layer.visible = False
+
+        # 2) Move the lifetime layer so it sits just above the base image
+        base_idx = None
+        for i, lay in enumerate(self.viewer.layers):
+            if (hasattr(lay, "source") and lay.source.path is not None
+                and os.path.basename(lay.source.path) == os.path.basename(file_name)):
+                base_idx = i
+                break
+
+        if base_idx is not None:
+            lifetime_idx = self.viewer.layers.index(layer)
+            # If the lifetime layer is below the base image, move it above
+            if lifetime_idx < base_idx:
+                self.viewer.layers.move(lifetime_idx, base_idx + 1)
+
+        # Keep the lifetime layer permanently (store it if needed).
+        self.lifetime_layers[file_name] = layer
+
+        # Set the current file to this file.
+        self.current_file = file_name
+        
         # Finally, replot the phasor using only the g/s data from checked files.
         self.replot_phasor()
-        QApplication.restoreOverrideCursor()
+
 
      
     # def replot_phasor(self):
@@ -478,18 +495,22 @@ class PhasorWidget(QWidget):
 
 
    
-    def calculate_g_s_coordinates(self, image_data, laser_frequency, harmonic, zero_indices=None):
+    @staticmethod
+    def calculate_g_s_coordinates(image_data, intro_params, zero_indices=None):
         """
         Calculate the G and S coordinates for phasor analysis using the channel assignments
         provided in the intro parameters.
     
         Supports 2D, 3D, or 4D arrays for both FD FLIM and TCSPC FLIM types.
         """
-        channel_map = self.intro_params.get("channel_assignments", [])
-        flim_type = self.intro_params.get("flim_type", "FD FLIM")
-        harmonic = self.intro_params.get("harmonic", 1)
-        laser_frequency = self.intro_params.get("laser_frequency", 0)
+        channel_map = intro_params.get("channel_assignments", [])
+        flim_type = intro_params.get("flim_type", "FD FLIM")
+        harmonic = intro_params.get("harmonic", 1)
+        # laser_frequency unused here but extracted in original
         intensity_idx = channel_map.index("Intensity") if "Intensity" in channel_map else 0
+        
+        original_g = None
+        original_s = None
     
         if flim_type == "FD FLIM":
             # Always works for 2D/3D/4D:
@@ -522,8 +543,8 @@ class PhasorWidget(QWidget):
             g_image = mod_array * np.cos(np.pi / 180 * phase_array)
             s_image = mod_array * np.sin(np.pi / 180 * phase_array)
     
-            self.original_g = g_image
-            self.original_s = s_image
+            original_g = g_image.copy()
+            original_s = s_image.copy()
     
             if zero_indices is not None:
                 g_image[zero_indices] = 0
@@ -547,8 +568,8 @@ class PhasorWidget(QWidget):
             g_values_m = (g_values - 32767.5) / 32767.5
             s_values_m = (s_values - 32767.5) / 32767.5
     
-            self.original_g = g_values_m
-            self.original_s = s_values_m
+            original_g = g_values_m.copy()
+            original_s = s_values_m.copy()
     
             if zero_indices is not None:
                 g_values_m[zero_indices] = 0
@@ -557,19 +578,19 @@ class PhasorWidget(QWidget):
             g_image = g_values_m.copy()
             s_image = s_values_m.copy()
     
-        return intensity, g_image, s_image
+        return intensity, g_image, s_image, original_g, original_s
     
     
-    
-    def compute_lifetimes_from_gs(self, g_array, s_array):
+    @staticmethod
+    def compute_lifetimes_from_gs(g_array, s_array, intro_params):
         """
         Compute modulation (tau_m) and phase (tau_p) lifetimes from G and S arrays.
         Laser frequency (in MHz) is taken from the intro parameters.
         If the computed magnitude m is zero, tau_m is set to 0.
         """
         # Retrieve the laser frequency from the intro parameters (in MHz)
-        laser_freq_mhz = self.intro_params.get("laser_frequency", 80.0)
-        print(laser_freq_mhz)
+        laser_freq_mhz = intro_params.get("laser_frequency", 80.0)
+        # print(laser_freq_mhz)
         # Convert to Hz and compute angular frequency.
         w = 2.0 * np.pi * (laser_freq_mhz * 1e6)
     
@@ -648,12 +669,27 @@ class PhasorWidget(QWidget):
             print("No file data available for filtering.")
             return
 
-        # Ensure the smoothed data dictionary exists.
-        if not hasattr(self, "smoothed_gs_data"):
-            self.smoothed_gs_data = {}
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        # We pass a copy/extraction of relevant data to minimize side effects, 
+        # though passing file_gs_data dict (keys + pointers to arrays) is generally okay for read-access
+        # but let's be explicit if possible. here we just pass the dict.
+        self.thread_filter = QThread()
+        self.worker_filter = Worker(self.run_median_filter_processing, self.file_gs_data, nsmoothing)
+        self.worker_filter.moveToThread(self.thread_filter)
+        
+        self.thread_filter.started.connect(self.worker_filter.run)
+        self.worker_filter.result.connect(self.on_median_filter_result)
+        self.worker_filter.finished.connect(self.thread_filter.quit)
+        self.worker_filter.finished.connect(self.worker_filter.deleteLater)
+        self.thread_filter.finished.connect(self.thread_filter.deleteLater)
+        self.thread_filter.finished.connect(lambda: QApplication.restoreOverrideCursor())
+        
+        self.thread_filter.start()
 
-        # Process each file's data.
-        for file_name, data in self.file_gs_data.items():
+    @staticmethod
+    def run_median_filter_processing(file_gs_data, nsmoothing):
+        results = {}
+        for file_name, data in file_gs_data.items():
             original_g = data["g_image"]
             original_s = data["s_image"]
 
@@ -675,23 +711,26 @@ class PhasorWidget(QWidget):
                 for _ in range(nsmoothing):
                     filtered_g = signal.medfilt2d(filtered_g, kernel_size=3)
                     filtered_s = signal.medfilt2d(filtered_s, kernel_size=3)
+                filtered_g = filtered_g
+                filtered_s = filtered_s
             else:
-                print(f"Unsupported data shape for file: {file_name}")
+                # print(f"Unsupported data shape for file: {file_name}")
                 continue
 
-            # Save the filtered results in the smoothed dictionary.
-            self.smoothed_gs_data[file_name] = {
+            results[file_name] = {
                 "g_image": filtered_g.copy(),
                 "s_image": filtered_s.copy()
-                # Optionally, if you want to filter lifetime (tau_av), process here.
             }
-    
-        # Set a flag indicating that median filtering is active.
-        self.median_filter_applied = True
+        return results
 
-        # Replot the phasor dialog using filtered data.
+    def on_median_filter_result(self, results):
+        if not hasattr(self, "smoothed_gs_data"):
+            self.smoothed_gs_data = {}
+        
+        self.smoothed_gs_data.update(results)
+        self.median_filter_applied = True
         self.replot_phasor()
-        #print("Finished median filtering")
+
 
     
 

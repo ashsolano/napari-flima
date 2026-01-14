@@ -153,14 +153,14 @@ class FileSelectionTable(QGroupBox):
         group_select_combo.setEditable(False)
         group_select_combo.addItems(self.known_groups)
         group_select_combo.setFixedWidth(100)  # align combos
-        add_to_phasor_button.clicked.connect(self.add_group_to_phasor(selected_group = self.group_select.layout().itemAt(1).widget().currentText()))
-        self.group_select.addWidget(add_to_phasor_button)
         self.group_select.addWidget(group_select_combo)
+        add_to_phasor_button.clicked.connect(lambda: self.add_group_to_phasor(selected_group=group_select_combo.currentText()))
+        self.group_select.addWidget(add_to_phasor_button)
         main_layout.addLayout(self.group_select)
 
         main_layout.addStretch()
 
-    def add_group_to_phasor(self, selected_group):
+    def add_group_to_phasor(self, selected_group = "None"):
         """Adds an entire group to the phasor plot
         
         :param str selected_group: name of group to add to phasor plot
