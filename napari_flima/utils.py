@@ -24,8 +24,10 @@ from qtpy.QtWidgets import (
     QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QFormLayout,
     QGridLayout, QFileDialog, QSlider, QToolTip
 )
-from qtpy.QtCore import QTimer
+from qtpy.QtCore import QTimer, QThread, QObject
 from functools import partial
+import sys
+import traceback
 
 
 import imageio
@@ -336,3 +338,36 @@ class NumericDelegate(QStyledItemDelegate):
         # Commit the edited text back to the model
         text_value = editor.text()
         model.setData(index, text_value, Qt.EditRole)
+
+# ---------------------------------------------------------------------------
+# Worker class for threading
+    
+class Worker(QObject):
+    """
+    Worker thread integration
+    """
+    finished = Signal()
+    error = Signal(tuple)
+    result = Signal(object)
+    progress = Signal(int)
+
+    def __init__(self, fn, *args, **kwargs):
+        super(Worker, self).__init__()
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs
+
+    def run(self):
+        """
+        Initialise the runner function with passed args, kwargs.
+        """
+        # Retrieve args/kwargs here; and fire processing using them
+        try:
+            result = self.fn(*self.args, **self.kwargs)
+            self.result.emit(result)
+        except:
+            traceback.print_exc()
+            exctype, value = sys.exc_info()[:2]
+            self.error.emit((exctype, value, traceback.format_exc()))
+        finally:
+            self.finished.emit()

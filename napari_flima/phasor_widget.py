@@ -8,7 +8,7 @@ from scipy import signal
 from matplotlib.colors import CSS4_COLORS
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from napari.utils.colormaps import Colormap
-from qtpy.QtCore import Qt, Signal, QRect, QEvent, QTimer
+from qtpy.QtCore import Qt, Signal, QRect, QEvent, QTimer, QThread
 from qtpy.QtGui import (
     QClipboard, QPixmap, QColor, QStandardItem, QStandardItemModel,
     QPainter, QFont, QBrush, QIcon, QDoubleValidator, QIntValidator
@@ -29,7 +29,7 @@ from .file_selection_table import FileSelectionTable
 from .cursor_analysis import CursorAnalysisWidget
 
 from .utils import (
-    extract_channel, ColorSelectorApp, PlotCanvas
+    extract_channel, ColorSelectorApp, PlotCanvas, Worker
 )
 
 #------------------------------------------------------------------------------
@@ -67,6 +67,7 @@ class PhasorWidget(QWidget):
         # --- File Selection Section ---
         self.file_selection_widget = FileSelectionTable(self, title="🛈 &File Selection")
         self.file_selection_widget.threshold_changed.connect(self.update_threshold)
+        self.file_selection_widget.mask_changed.connect(self.on_mask_changed)
         layout.addWidget(self.file_selection_widget)
         
     
@@ -101,10 +102,51 @@ class PhasorWidget(QWidget):
         self.dialog.apply_filter_button.clicked.connect(self.apply_median_filter)
         self.dialog.reset_filter_button.clicked.connect(self.reset_filter)
         
+        # Debouncing timer for phasor replotting
+        self.replot_timer = QTimer()
+        self.replot_timer.setSingleShot(True)
+        self.replot_timer.setInterval(200)  # 200ms delay
+        self.replot_timer.timeout.connect(self.replot_phasor)
+        
  
     
+    def update_threshold(self, file_name, threshold_value):
+        self.update_image_layer(file_name, threshold_value[0], threshold_value[1])
+        
+    def on_mask_changed(self, file_name, mask_name):
+        # Trigger update of the image layer to re-apply mask + threshold
+        if file_name in self.file_selection_widget.file_rows:
+             # Retrieve current threshold values to pass
+             slider = self.file_selection_widget.file_rows[file_name]["slider"]
+             val = slider.value()
+             self.update_image_layer(file_name, val[0], val[1])
+             
+             # Trigger phasor recalculation if checked
+             if self.file_selection_widget.file_rows[file_name]["checkbox"].isChecked():
+                 self._start_phasor_worker(file_name)
+
+    def load_mask_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Mask File", "", "Images (*.tif *.tiff *.png *.jpg)")
+        if file_path:
+            # Load as a labels layer or image layer? 
+            # Usually mask is binary, but user said "treat non zero values as 1s", implies it might be intensity image.
+            # Loading as Image layer is safer.
+            try:
+                self.viewer.open(file_path, name=os.path.basename(file_path), plugin='napari')
+            except Exception as e:
+                print(f"Error loading mask file: {e}")
+            
+    def update_mask_choices(self):
+        # list all image/label layers that are NOT the current analysis files? 
+        # Or just list all layers. The user can distinguish.
+        # But we need to avoid self-selection loops if possible? (Simplicity: just list all).
+        layers = [layer.name for layer in self.viewer.layers if hasattr(layer, 'data')]
+        self.file_selection_widget.update_mask_choices(layers)
+
     def on_layer_added(self, event):
         layer = event.value
+        self.update_mask_choices() # Update mask choices whenever a layer is added
+        
         if hasattr(layer, 'source') and layer.source.path:
             file_path = layer.source.path
             
@@ -123,19 +165,15 @@ class PhasorWidget(QWidget):
                     idx = 0
                 layer.metadata = layer.metadata or {}
                 layer.metadata['grid'] = (0, idx)  # e.g., row 0, column = index
-
-
+    
     def on_layer_removed(self, event):
-        layer = event.value
-        if hasattr(layer, 'source') and layer.source.path:
-            file_path = layer.source.path
-            self.file_selection_widget.remove_file(file_path)
+        self.update_mask_choices() # Update mask choices whenever a layer is removed
+
 
     def update_threshold(self, file_name, threshold_value):
         self.update_image_layer(file_name, threshold_value[0], threshold_value[1])
     
-    
-            
+
     def update_image_layer(self, file_name, threshold_lower, threshold_upper):
         channel_map = self.intro_params.get("channel_assignments", [])
         intensity_idx = channel_map.index("Intensity") if "Intensity" in channel_map else 0
@@ -153,7 +191,7 @@ class PhasorWidget(QWidget):
             return
         original_data = self.file_selection_widget.file_rows[file_name]["layer_data"]
         checkbox_checked = self.file_selection_widget.file_rows[file_name]["checkbox"].isChecked()
-        mask_layer_name = file_name + "_mask"
+        # mask_layer_name = file_name + "_mask" # Deprecated single name
     
         # --- Universal thresholding logic ---
         intensity_image = extract_channel(original_data, intensity_idx)
@@ -161,23 +199,124 @@ class PhasorWidget(QWidget):
             mask_lower = intensity_image < threshold_lower
             mask_upper = intensity_image > threshold_upper
             mask = np.logical_or(mask_lower, mask_upper)
-            mask0 = mask[0]
+            # mask0 = mask[0] 
         else:
             mask_lower = intensity_image < threshold_lower
             mask_upper = intensity_image > threshold_upper
             mask = np.logical_or(mask_lower, mask_upper)
-            mask0 = mask
-        if not checkbox_checked:
-            rgba_mask = np.zeros(mask0.shape + (4,), dtype=np.uint8)
-            rgba_mask[mask0, 0] = 255
-            rgba_mask[mask0, 3] = 128
-            if mask0.sum() > 0:
-                overlay = self._create_or_update_overlay(mask_layer_name, rgba_mask)
-            else:
-                self.remove_overlay(mask_layer_name)
+            # mask0 = mask
+
+        # --- Apply External Mask Layer if selected ---
+        mask_selection_combo = self.file_selection_widget.file_rows[file_name].get("mask_combo")
+        binary_ext_mask = None # for blue overlay
+        
+        if mask_selection_combo:
+            selected_mask_name = mask_selection_combo.currentText()
+            if selected_mask_name != "None" and selected_mask_name in self.viewer.layers:
+                mask_layer_obj = self.viewer.layers[selected_mask_name]
+                mask_data = mask_layer_obj.data
+                
+                # Treat non-zero values as 1 (inclusion mask)
+                # Binarize and invert for exclusion (True where we want to set to 0)
+                binary_ext_mask = (mask_data != 0)
+                exclusion_ext_mask = ~binary_ext_mask
+                
+                final_ext_mask = None
+                
+                # Broadcasting logic
+                if exclusion_ext_mask.shape == intensity_image.shape:
+                    final_ext_mask = exclusion_ext_mask
+                elif exclusion_ext_mask.ndim == 2 and intensity_image.ndim == 3:
+                     # Broadcast 2D mask to 3D image: (H, W) -> (T, H, W)
+                     if exclusion_ext_mask.shape == intensity_image.shape[1:]:
+                         final_ext_mask = np.broadcast_to(exclusion_ext_mask, intensity_image.shape)
+                     else:
+                         print(f"Shape mismatch: Mask {exclusion_ext_mask.shape} vs Image {intensity_image.shape}")
+                elif exclusion_ext_mask.ndim == 3 and intensity_image.ndim == 3:
+                     # Frame mismatch handling
+                     if exclusion_ext_mask.shape != intensity_image.shape:
+                         print(f"Frame/Shape mismatch between mask {selected_mask_name} and image {file_name}. Applying anyway by cycling frames.")
+                         
+                         if exclusion_ext_mask.shape[1:] == intensity_image.shape[1:]:
+                             # Spatial dims match.
+                             if exclusion_ext_mask.shape[0] == 1:
+                                  # Broadcast single frame
+                                  final_ext_mask = np.broadcast_to(exclusion_ext_mask[0], intensity_image.shape)
+                             else:
+                                  # Iterate and cycle frames if needed
+                                  final_ext_mask = np.zeros(intensity_image.shape, dtype=bool)
+                                  T_img = intensity_image.shape[0]
+                                  T_mask = exclusion_ext_mask.shape[0]
+                                  for t in range(T_img):
+                                      t_m = t % T_mask
+                                      final_ext_mask[t] = exclusion_ext_mask[t_m]
+                         else:
+                             print("Spatial dimensions mismatch. Cannot apply mask efficiently.")
+                
+                if final_ext_mask is None and exclusion_ext_mask.ndim == intensity_image.ndim:
+                     # Fallback exact shape check
+                     if exclusion_ext_mask.shape == intensity_image.shape:
+                         final_ext_mask = exclusion_ext_mask
+
+                # Combine with threshold mask
+                if final_ext_mask is not None:
+                    mask = np.logical_or(mask, final_ext_mask)
+
+        # Prepare mask0 for overlay (frame 0)
+        if mask.ndim == 3:
+            mask0 = mask[0]
         else:
-            self.remove_overlay(mask_layer_name)
-        # Apply threshold
+            mask0 = mask
+
+        # Prepare blue inclusion mask (frame 0) - "Show binary mask in blue"
+        blue_mask0 = None
+        if binary_ext_mask is not None:
+             # binary_ext_mask might be 2D or 3D. 
+             # We want the *broadcasted* version if possible, or just the frame 0.
+             # Actually, final_ext_mask is the EXCLUSION mask. 
+             # The inclusion mask is ~final_ext_mask (roughly, assuming exact broadcasting).
+             # Let's derive blue_mask0 from final_ext_mask if it exists (which is broadcasted exclusion).
+             if final_ext_mask is not None:
+                 if final_ext_mask.ndim == 3:
+                     blue_mask0 = ~final_ext_mask[0] # Inclusion = Not Excluded
+                 else:
+                     blue_mask0 = ~final_ext_mask
+             elif binary_ext_mask is not None:
+                 # Fallback to the raw binary mask frame 0
+                 if binary_ext_mask.ndim == 3:
+                     blue_mask0 = binary_ext_mask[0]
+                 else:
+                     blue_mask0 = binary_ext_mask
+
+        # Overlay Logic
+        mask_layer_red = file_name + "_mask_red"   # "All exclusions"
+        mask_layer_blue = file_name + "_mask_blue" # "Binary mask"
+
+        if not checkbox_checked:
+            # 1. Red Overlay (Exclusion)
+            rgba_red = np.zeros(mask0.shape + (4,), dtype=np.uint8)
+            rgba_red[mask0, 0] = 255 # R
+            rgba_red[mask0, 3] = 128 # A
+            
+            if mask0.sum() > 0:
+                self._create_or_update_overlay(mask_layer_red, rgba_red)
+            else:
+                self.remove_overlay(mask_layer_red)
+
+            # 2. Blue Overlay (Inclusion / Binary Mask)
+            if blue_mask0 is not None and blue_mask0.sum() > 0:
+                rgba_blue = np.zeros(blue_mask0.shape + (4,), dtype=np.uint8)
+                rgba_blue[blue_mask0, 2] = 255 # B
+                rgba_blue[blue_mask0, 3] = 128 # A
+                self._create_or_update_overlay(mask_layer_blue, rgba_blue)
+            else:
+                self.remove_overlay(mask_layer_blue)
+
+        else:
+            self.remove_overlay(mask_layer_red)
+            self.remove_overlay(mask_layer_blue)
+            
+        # Apply threshold (and external mask)
         intensity_image[mask] = 0
         # Copy back into right place in data
         updated_data = original_data.copy()
@@ -195,25 +334,6 @@ class PhasorWidget(QWidget):
         image_layer.data = updated_data
         image_layer.refresh()
         self.current_mask = mask
-        # Overlay positioning logic as before...
-        if mask_layer_name in self.viewer.layers:
-            overlay_layer = self.viewer.layers[mask_layer_name]
-            if self.viewer.grid.enabled:
-                if hasattr(image_layer, "metadata") and "grid" in image_layer.metadata:
-                    overlay_layer.metadata = overlay_layer.metadata or {}
-                    overlay_layer.metadata["grid"] = image_layer.metadata["grid"]
-                else:
-                    try:
-                        idx = self.file_order.index(file_name)
-                    except ValueError:
-                        idx = 0
-                    overlay_layer.metadata = overlay_layer.metadata or {}
-                    overlay_layer.metadata["grid"] = (0, idx)
-            else:
-                self._bring_to_top(image_layer, overlay_layer)
-
-    
-   
     
     def _create_or_update_overlay(self, layer_name, rgba_mask):
         """Helper to create or update an overlay layer with the given name."""
@@ -245,8 +365,19 @@ class PhasorWidget(QWidget):
     
     def slider_released(self, file_name):
         """Called when the slider is released; remove the red overlay for that file."""
-        mask_layer_name = file_name + "_mask"
-        QTimer.singleShot(0, lambda: self.remove_overlay(mask_layer_name))
+        mask_layer_red = file_name + "_mask_red"
+        mask_layer_blue = file_name + "_mask_blue"
+        # Also remove legacy name just in case
+        legacy_name = file_name + "_mask"
+        
+        QTimer.singleShot(0, lambda: self.remove_overlay(mask_layer_red))
+        QTimer.singleShot(0, lambda: self.remove_overlay(mask_layer_blue))
+        QTimer.singleShot(0, lambda: self.remove_overlay(legacy_name))
+        
+        # Trigger phasor recalculation if checked
+        if file_name in self.file_selection_widget.file_rows:
+             if self.file_selection_widget.file_rows[file_name]["checkbox"].isChecked():
+                 self._start_phasor_worker(file_name)
 
     
    
@@ -260,102 +391,12 @@ class PhasorWidget(QWidget):
            no longer appear in the phasor plot. The lifetime layer and cursor mask layer remain 
            for later reference.
         """
-        QApplication.setOverrideCursor(Qt.WaitCursor)
         if state == Qt.Checked:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
             threshold_value = self.file_selection_widget.file_rows[file_name]["slider"].value()
             self.update_threshold(file_name, threshold_value)
-            layer_data = self.file_selection_widget.file_rows[file_name]["layer_data"]
-    
-            # Compute intensity, g, and s arrays.
-            intensity, g_image, s_image = self.calculate_g_s_coordinates(
-                layer_data,
-                self.intro_params.get("laser_frequency", 0),
-                self.intro_params.get("harmonic", 1),
-                zero_indices=self.current_mask  # assuming update_threshold stored the mask here
-            )
-    
-            # Compute lifetimes.
-            #print("Begin computing lifetime values")
-            tau_m, tau_p, tau_av = self.compute_lifetimes_from_gs(g_image, s_image)
-            #print("Complete lifetime value calculations")
-    
-            # Apply threshold mask to the lifetime arrays as before...
-            if self.current_mask is not None:
-                try:
-                    if tau_m.ndim == self.current_mask.ndim:
-                        tau_m[self.current_mask] = np.nan
-                        tau_p[self.current_mask] = np.nan
-                        tau_av[self.current_mask] = np.nan
-                    elif tau_m.ndim == 2 and self.current_mask.ndim == 3:
-                        tau_m[0][self.current_mask[0]] = np.nan
-                        tau_p[0][self.current_mask[0]] = np.nan
-                        tau_av[0][self.current_mask[0]] = np.nan
-                except Exception as e:
-                    print("Error applying threshold mask to lifetime images:", e)
-    
-            # Store computed g/s (and lifetime) data for phasor plotting.
-            self.file_gs_data[file_name] = {
-                "intensity": intensity,
-                "g_image": g_image,
-                "s_image": s_image,
-                "tau_av": tau_av  # for display if needed
-            }
-            self.intensity = intensity
-            self.g = g_image
-            self.s = s_image
-    
-            # Update or add the lifetime layer.
-            base_name = os.path.splitext(os.path.basename(file_name))[0]
-            tau_av_layer_name = f"{base_name}_lifetime"
-            try:
-                min_tau_av = np.nanpercentile(tau_av, 1)
-                max_tau_av = np.nanpercentile(tau_av, 99)
-            except Exception as e:
-                print("Error computing percentiles for tau_av:", e)
-                min_tau_av, max_tau_av = np.nanmin(tau_av), np.nanmax(tau_av)
-    
-            # Prepare the data for display.
-            if tau_av.ndim == 2:
-                tau_av_disp = np.expand_dims(np.expand_dims(tau_av, axis=0), axis=0)
-            elif tau_av.ndim == 3:
-                tau_av_disp = np.expand_dims(tau_av, axis=1)
-            else:
-                tau_av_disp = tau_av
-    
-            if tau_av_layer_name in self.viewer.layers:
-                layer = self.viewer.layers[tau_av_layer_name]
-                layer.data = tau_av_disp
-            else:
-                layer = self.viewer.add_image(
-                    tau_av_disp,
-                    name=tau_av_layer_name,
-                    colormap="turbo",
-                    contrast_limits=(min_tau_av, max_tau_av)
-                )
-    
-            # 1) Hide the lifetime layer by default
-            layer.visible = False
-    
-            # 2) Move the lifetime layer so it sits just above the base image
-            base_idx = None
-            for i, lay in enumerate(self.viewer.layers):
-                if (hasattr(lay, "source") and lay.source.path is not None
-                    and os.path.basename(lay.source.path) == os.path.basename(file_name)):
-                    base_idx = i
-                    break
-    
-            if base_idx is not None:
-                lifetime_idx = self.viewer.layers.index(layer)
-                # If the lifetime layer is below the base image, move it above
-                if lifetime_idx < base_idx:
-                    self.viewer.layers.move(lifetime_idx, base_idx + 1)
-    
-            # Keep the lifetime layer permanently (store it if needed).
-            self.lifetime_layers[file_name] = layer
-    
-            # Set the current file to this file.
-            self.current_file = file_name
-    
+            self._start_phasor_worker(file_name)
+
         else:
             # If unchecked, remove this file's g/s data from phasor plotting.
             if file_name in self.file_gs_data:
@@ -366,14 +407,142 @@ class PhasorWidget(QWidget):
                     self.current_file = list(self.file_gs_data.keys())[0]
                 else:
                     self.current_file = None
-            # (Lifetime layer and cursor mask layer remain, so that analysis persists.)
-            #print(f"File {file_name} unticked; lifetime layer and cursor mask are kept.")
-    
+            
+            self.replot_timer.start()
+
+    def _start_phasor_worker(self, file_name):
+        # Prepare data for worker
+        layer_data = self.file_selection_widget.file_rows[file_name]["layer_data"]
+        current_mask = self.current_mask.copy() if self.current_mask is not None else None
+        # Copy intro_params to ensure thread safety (shallow copy is usually enough for dict of primitives)
+        intro_params = self.intro_params.copy()
+
+        # Create worker and thread
+        thread = QThread()
+        worker = Worker(self.run_phasor_calculation, layer_data, intro_params, current_mask)
+        worker.moveToThread(thread)
+        
+        # Store references to prevent garbage collection
+        if not hasattr(self, "_threads"):
+            self._threads = {}
+        self._threads[file_name] = (thread, worker)
+
+        # Connect signals
+        thread.started.connect(worker.run)
+        worker.result.connect(partial(self.on_phasor_result, file_name=file_name, current_mask=current_mask))
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        # Cleanup storage when thread finishes
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._cleanup_thread(file_name))
+        # Only restore cursor if we set it? 
+        # Ideally we track cursor stack, but restoreOverrideCursor is safe if matching set calls.
+        # But here we might call start_worker multiple times.
+        # Simple fix: emit a signal or just assume UI interaction blocked?
+        # Let's just restore cursor at end.
+        thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
+        
+        thread.start()
+
+    @staticmethod
+    def run_phasor_calculation(layer_data, intro_params, current_mask):
+        intensity, g_image, s_image, orig_g, orig_s = PhasorWidget.calculate_g_s_coordinates(
+            layer_data, intro_params, zero_indices=current_mask
+        )
+        tau_m, tau_p, tau_av = PhasorWidget.compute_lifetimes_from_gs(g_image, s_image, intro_params)
+        return intensity, g_image, s_image, orig_g, orig_s, tau_m, tau_p, tau_av
+
+    def on_phasor_result(self, result, file_name, current_mask):
+        intensity, g_image, s_image, orig_g, orig_s, tau_m, tau_p, tau_av = result
+        
+        # Apply threshold mask to the lifetime arrays
+        if current_mask is not None:
+            try:
+                if tau_m.ndim == current_mask.ndim:
+                    tau_m[current_mask] = np.nan
+                    tau_p[current_mask] = np.nan
+                    tau_av[current_mask] = np.nan
+                elif tau_m.ndim == 2 and current_mask.ndim == 3:
+                    tau_m[0][current_mask[0]] = np.nan
+                    tau_p[0][current_mask[0]] = np.nan
+                    tau_av[0][current_mask[0]] = np.nan
+            except Exception as e:
+                print("Error applying threshold mask to lifetime images:", e)
+
+        # Store computed g/s (and lifetime) data for phasor plotting.
+        self.file_gs_data[file_name] = {
+            "intensity": intensity,
+            "g_image": g_image,
+            "s_image": s_image,
+                "tau_av": tau_av  # for display if needed
+        }
+        self.intensity = intensity
+        self.g = g_image
+        self.s = s_image
+        self.original_g = orig_g
+        self.original_s = orig_s
+
+        # Update or add the lifetime layer.
+        base_name = os.path.splitext(os.path.basename(file_name))[0]
+        tau_av_layer_name = f"{base_name}_lifetime"
+        try:
+            min_tau_av = np.nanpercentile(tau_av, 1)
+            max_tau_av = np.nanpercentile(tau_av, 99)
+        except Exception as e:
+            # print("Error computing percentiles for tau_av:", e)
+            min_tau_av, max_tau_av = np.nanmin(tau_av), np.nanmax(tau_av)
+
+        # Prepare the data for display.
+        if tau_av.ndim == 2:
+            tau_av_disp = np.expand_dims(np.expand_dims(tau_av, axis=0), axis=0)
+        elif tau_av.ndim == 3:
+            tau_av_disp = np.expand_dims(tau_av, axis=1)
+        else:
+            tau_av_disp = tau_av
+
+        if tau_av_layer_name in self.viewer.layers:
+            layer = self.viewer.layers[tau_av_layer_name]
+            layer.data = tau_av_disp
+        else:
+            layer = self.viewer.add_image(
+                tau_av_disp,
+                name=tau_av_layer_name,
+                colormap="turbo",
+                contrast_limits=(min_tau_av, max_tau_av)
+            )
+
+        # 1) Hide the lifetime layer by default
+        layer.visible = False
+
+        # 2) Move the lifetime layer so it sits just above the base image
+        base_idx = None
+        for i, lay in enumerate(self.viewer.layers):
+            if (hasattr(lay, "source") and lay.source.path is not None
+                and os.path.basename(lay.source.path) == os.path.basename(file_name)):
+                base_idx = i
+                break
+
+        if base_idx is not None:
+            lifetime_idx = self.viewer.layers.index(layer)
+            # If the lifetime layer is below the base image, move it above
+            if lifetime_idx < base_idx:
+                self.viewer.layers.move(lifetime_idx, base_idx + 1)
+
+        # Keep the lifetime layer permanently (store it if needed).
+        self.lifetime_layers[file_name] = layer
+
+        # Set the current file to this file.
+        self.current_file = file_name
+        
         # Finally, replot the phasor using only the g/s data from checked files.
-        self.replot_phasor()
-        QApplication.restoreOverrideCursor()
+        self.replot_timer.start()
+
 
      
+    def _cleanup_thread(self, key):
+        if hasattr(self, "_threads") and key in self._threads:
+            del self._threads[key]
+
     # def replot_phasor(self):
     #     """
     #     Replot the phasor dialog by timepoint, overlaying every checked file.
@@ -454,11 +623,18 @@ class PhasorWidget(QWidget):
                 g_arr = raw["g_image"]
                 s_arr = raw["s_image"]
                 if g_arr.ndim == 3:
-                    g_list.append(g_arr[t].flatten())
-                    s_list.append(s_arr[t].flatten())
+                    g_slice = g_arr[t].flatten()
+                    s_slice = s_arr[t].flatten()
+                    # Filter out zero values (masked)
+                    valid = (g_slice != 0) | (s_slice != 0)
+                    g_list.append(g_slice[valid])
+                    s_list.append(s_slice[valid])
                 else:
-                    g_list.append(g_arr.flatten())
-                    s_list.append(s_arr.flatten())
+                    g_slice = g_arr.flatten()
+                    s_slice = s_arr.flatten()
+                    valid = (g_slice != 0) | (s_slice != 0)
+                    g_list.append(g_slice[valid])
+                    s_list.append(s_slice[valid])
             # Concatenate ALL files' points at this timepoint
             g_concat = np.concatenate(g_list)
             s_concat = np.concatenate(s_list)
@@ -477,19 +653,23 @@ class PhasorWidget(QWidget):
               
 
 
-   
-    def calculate_g_s_coordinates(self, image_data, laser_frequency, harmonic, zero_indices=None):
+    
+    @staticmethod
+    def calculate_g_s_coordinates(image_data, intro_params, zero_indices=None):
         """
         Calculate the G and S coordinates for phasor analysis using the channel assignments
         provided in the intro parameters.
     
         Supports 2D, 3D, or 4D arrays for both FD FLIM and TCSPC FLIM types.
         """
-        channel_map = self.intro_params.get("channel_assignments", [])
-        flim_type = self.intro_params.get("flim_type", "FD FLIM")
-        harmonic = self.intro_params.get("harmonic", 1)
-        laser_frequency = self.intro_params.get("laser_frequency", 0)
+        channel_map = intro_params.get("channel_assignments", [])
+        flim_type = intro_params.get("flim_type", "FD FLIM")
+        harmonic = intro_params.get("harmonic", 1)
+        # laser_frequency unused here but extracted in original
         intensity_idx = channel_map.index("Intensity") if "Intensity" in channel_map else 0
+        
+        original_g = None
+        original_s = None
     
         if flim_type == "FD FLIM":
             # Always works for 2D/3D/4D:
@@ -522,12 +702,13 @@ class PhasorWidget(QWidget):
             g_image = mod_array * np.cos(np.pi / 180 * phase_array)
             s_image = mod_array * np.sin(np.pi / 180 * phase_array)
     
-            self.original_g = g_image
-            self.original_s = s_image
+            original_g = g_image.copy()
+            original_s = s_image.copy()
     
             if zero_indices is not None:
                 g_image[zero_indices] = 0
                 s_image[zero_indices] = 0
+                intensity[zero_indices] = 0
     
         elif flim_type == "TCSPC FLIM":
             # Robust extraction for all dimensions:
@@ -547,29 +728,30 @@ class PhasorWidget(QWidget):
             g_values_m = (g_values - 32767.5) / 32767.5
             s_values_m = (s_values - 32767.5) / 32767.5
     
-            self.original_g = g_values_m
-            self.original_s = s_values_m
+            original_g = g_values_m.copy()
+            original_s = s_values_m.copy()
     
             if zero_indices is not None:
                 g_values_m[zero_indices] = 0
                 s_values_m[zero_indices] = 0
+                intensity[zero_indices] = 0
     
             g_image = g_values_m.copy()
             s_image = s_values_m.copy()
     
-        return intensity, g_image, s_image
+        return intensity, g_image, s_image, original_g, original_s
     
     
-    
-    def compute_lifetimes_from_gs(self, g_array, s_array):
+    @staticmethod
+    def compute_lifetimes_from_gs(g_array, s_array, intro_params):
         """
         Compute modulation (tau_m) and phase (tau_p) lifetimes from G and S arrays.
         Laser frequency (in MHz) is taken from the intro parameters.
         If the computed magnitude m is zero, tau_m is set to 0.
         """
         # Retrieve the laser frequency from the intro parameters (in MHz)
-        laser_freq_mhz = self.intro_params.get("laser_frequency", 80.0)
-        print(laser_freq_mhz)
+        laser_freq_mhz = intro_params.get("laser_frequency", 80.0)
+        # print(laser_freq_mhz)
         # Convert to Hz and compute angular frequency.
         w = 2.0 * np.pi * (laser_freq_mhz * 1e6)
     
@@ -648,12 +830,33 @@ class PhasorWidget(QWidget):
             print("No file data available for filtering.")
             return
 
-        # Ensure the smoothed data dictionary exists.
-        if not hasattr(self, "smoothed_gs_data"):
-            self.smoothed_gs_data = {}
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        # We pass a copy/extraction of relevant data to minimize side effects, 
+        # though passing file_gs_data dict (keys + pointers to arrays) is generally okay for read-access
+        # but let's be explicit if possible. here we just pass the dict.
+        thread = QThread()
+        worker = Worker(self.run_median_filter_processing, self.file_gs_data, nsmoothing)
+        worker.moveToThread(thread)
+        
+        # Store ref
+        if not hasattr(self, "_threads"):
+            self._threads = {}
+        self._threads['median_filter'] = (thread, worker)
 
-        # Process each file's data.
-        for file_name, data in self.file_gs_data.items():
+        thread.started.connect(worker.run)
+        worker.result.connect(self.on_median_filter_result)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._cleanup_thread('median_filter'))
+        thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
+        
+        thread.start()
+
+    @staticmethod
+    def run_median_filter_processing(file_gs_data, nsmoothing):
+        results = {}
+        for file_name, data in file_gs_data.items():
             original_g = data["g_image"]
             original_s = data["s_image"]
 
@@ -675,23 +878,26 @@ class PhasorWidget(QWidget):
                 for _ in range(nsmoothing):
                     filtered_g = signal.medfilt2d(filtered_g, kernel_size=3)
                     filtered_s = signal.medfilt2d(filtered_s, kernel_size=3)
+                filtered_g = filtered_g
+                filtered_s = filtered_s
             else:
-                print(f"Unsupported data shape for file: {file_name}")
+                # print(f"Unsupported data shape for file: {file_name}")
                 continue
 
-            # Save the filtered results in the smoothed dictionary.
-            self.smoothed_gs_data[file_name] = {
+            results[file_name] = {
                 "g_image": filtered_g.copy(),
                 "s_image": filtered_s.copy()
-                # Optionally, if you want to filter lifetime (tau_av), process here.
             }
-    
-        # Set a flag indicating that median filtering is active.
-        self.median_filter_applied = True
+        return results
 
-        # Replot the phasor dialog using filtered data.
-        self.replot_phasor()
-        #print("Finished median filtering")
+    def on_median_filter_result(self, results):
+        if not hasattr(self, "smoothed_gs_data"):
+            self.smoothed_gs_data = {}
+        
+        self.smoothed_gs_data.update(results)
+        self.median_filter_applied = True
+        self.replot_timer.start()
+
 
     
 
@@ -703,7 +909,7 @@ class PhasorWidget(QWidget):
         # Optionally, reset the smoothed data to match the original.
         if self.file_gs_data:
             self.smoothed_gs_data = {file_name: data.copy() for file_name, data in self.file_gs_data.items()}
-        self.replot_phasor()
+        self.replot_timer.start()
 
     
    
@@ -785,101 +991,165 @@ class PhasorWidget(QWidget):
           - If g_data is 3D (T, H, W), the layer becomes (T, 1, H, W, 4).
         This aligns the time axis with the viewer, letting Napari handle multi-frame displays.
         """
-        print("Selecting pixels")
+        #print("Selecting pixels (threaded)")
         
-        # Ensure intensity data is available.
         if not hasattr(self, 'intensity') or self.intensity is None:
-            print("Error: intensity data is not initialized.")
+            # print("Error: intensity data is not initialized.")
             return
-    
-        # Loop over each active file (checked) in self.file_gs_data.
+
+        # 1) Gather data from UI (must happen on main thread)
+        #    We need:
+        #      - file_gs_data / smoothed_gs_data (the G/S arrays)
+        #      - active cursor parameters (radius, G, S, color)
+        #      - median_filter_applied flag
+
+        cursor_params = []
+        for row_data in self.cursor_analysis_widget.cursor_rows_data:
+            if row_data["checkbox"].isChecked():
+                try:
+                    r = float(row_data["col_2"].text())
+                    g_c = float(row_data["col_3"].text())
+                    s_c = float(row_data["col_4"].text())
+                    c_txt = row_data["color_selector"].currentText()
+                    params = {
+                        "radius": r,
+                        "g_center": g_c,
+                        "s_center": s_c,
+                        "color_text": c_txt
+                    }
+                    cursor_params.append(params)
+                except Exception as e:
+                    print(f"Error parsing cursor row: {e}")
+                    continue
+        
+        if not cursor_params:
+            # If no cursors active, we might want to clear existing masks?
+            # For now, just return or handle as empty.
+            pass
+
+        # Prepare a lightweight dict of file -> (g_array, s_array)
+        # to avoid passing 'self' to worker.
+        files_to_process = {}
         for file_name, file_data in self.file_gs_data.items():
-            # Decide whether to use smoothed data or original data.
             if self.median_filter_applied and file_name in self.smoothed_gs_data:
-                g_data = self.smoothed_gs_data[file_name]["g_image"]
-                s_data = self.smoothed_gs_data[file_name]["s_image"]
+                g = self.smoothed_gs_data[file_name]["g_image"]
+                s = self.smoothed_gs_data[file_name]["s_image"]
             else:
-                g_data = file_data["g_image"]
-                s_data = file_data["s_image"]
-    
-            if g_data is None:
-                print(f"No g data available for {file_name}.")
-                continue
-    
-            # Create an RGBA array for highlighted pixels for this file.
-            # If g_data is (T, H, W), we initially build (T, H, W, 4).
-            # If g_data is (H, W), we build (H, W, 4).
+                g = file_data["g_image"]
+                s = file_data["s_image"]
+            
+            if g is not None and s is not None:
+                files_to_process[file_name] = (g, s)
+
+        if not files_to_process:
+            return
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        
+        # 2) Create Thread & Worker
+        thread = QThread()
+        worker = Worker(self.calculate_cursor_masks, files_to_process, cursor_params)
+        worker.moveToThread(thread)
+        
+        # Store ref
+        if not hasattr(self, "_threads"):
+            self._threads = {}
+        self._threads['cursor_update'] = (thread, worker)
+
+        thread.started.connect(worker.run)
+        worker.result.connect(self.on_cursor_mask_result)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._cleanup_thread('cursor_update'))
+        thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
+        
+        thread.start()
+
+    @staticmethod
+    def calculate_cursor_masks(files_map, cursor_params):
+        """
+        Static method running in worker thread.
+        files_map: { filename: (g_arr, s_arr) }
+        cursor_params: list of dicts {radius, g_center, s_center, color_text}
+        Returns: dict { filename: (highlighted_pixels_rgba, layer_shape_hint) }
+        """
+        results = {}
+        
+        for file_name, (g_data, s_data) in files_map.items():
+            # Create blank RGBA
             if g_data.ndim == 3:
+                # (T, H, W, 4)
                 highlighted_pixels = np.zeros(g_data.shape + (4,), dtype=np.uint8)
             else:
+                # (H, W, 4)
                 highlighted_pixels = np.zeros(g_data.shape + (4,), dtype=np.uint8)
-            #print(f"For file {file_name}, highlighted_pixels shape: {highlighted_pixels.shape}")
-    
-            # Loop through each cursor row in the CursorAnalysisWidget.
-            for row_data in self.cursor_analysis_widget.cursor_rows_data:
-                if row_data["checkbox"].isChecked():
-                    try:
-                        radius = float(row_data["col_2"].text())
-                        g_center = float(row_data["col_3"].text())
-                        s_center = float(row_data["col_4"].text())
-                        cursor_color = row_data["color_selector"].currentText()
-                    except Exception as e:
-                        print(f"Error retrieving cursor settings for {file_name}: {e}")
-                        continue
-    
-                    #print(f"Cursor settings for {file_name} - "
-                          #f"Radius: {radius}, G: {g_center}, S: {s_center}, Color: {cursor_color}")
-                    rgb = QColor(cursor_color).getRgb()[:3]
-                    #print(f"RGB: {rgb}")
-    
-                    # Compute mask for each time frame if multi-frame, else for 2D.
-                    if g_data.ndim == 3:
-                        for t in range(g_data.shape[0]):
-                            distance = np.hypot(g_data[t] - g_center, s_data[t] - s_center)
-                            mask = distance <= radius
-                            highlighted_pixels[t][mask] = rgb + (255,)
-                    else:
-                        distance = np.hypot(g_data - g_center, s_data - s_center)
-                        mask = distance <= radius
-                        highlighted_pixels[mask] = rgb + (255,)
-                    #print(f"Finished updating highlighted pixels for {file_name} for this cursor.")
-    
-            # Save computed highlighted pixels in a dictionary for potential reuse.
-            if not hasattr(self, 'highlighted_pixels_dict'):
-                self.highlighted_pixels_dict = {}
-            self.highlighted_pixels_dict[file_name] = highlighted_pixels
-    
-            # --- Prepare data for display so that the time axis aligns properly ---
-            # If highlighted_pixels is 2D (H, W, 4), we expand to (1, 1, H, W, 4).
-            # If it's 3D (T, H, W, 4), we expand to (T, 1, H, W, 4).
-            # This mirrors your tau_av expansions.
+
+            for p in cursor_params:
+                radius = p["radius"]
+                g_c = p["g_center"]
+                s_c = p["s_center"]
+                color_name = p["color_text"]
+                
+                # QColor is not thread-safe safe or not available without GUI? 
+                # Actually QColor is QtGui, often okay, but safer to parse or pass RGB.
+                # simpler: we can use QColor here if QtGui is imported.
+                # If crash, we move rgb parsing to main thread.
+                try:
+                    rgb = QColor(color_name).getRgb()[:3]
+                except:
+                    rgb = (255, 0, 0)
+
+                if g_data.ndim == 3:
+                     # Vectorized over T is tricky if memory large, but let's try loop or broadcast
+                     # g_data: (T, Y, X)
+                    dist = np.hypot(g_data - g_c, s_data - s_c)
+                    mask = dist <= radius
+                    # mask is (T, Y, X)
+                    # highlight is (T, Y, X, 4)
+                    # We want to assign color where mask is True
+                    highlighted_pixels[mask] = rgb + (255,)
+                else:
+                    dist = np.hypot(g_data - g_c, s_data - s_c)
+                    mask = dist <= radius
+                    highlighted_pixels[mask] = rgb + (255,)
+            
+            # Prepare layer data shape
+            # If 2D (H, W, 4) -> (1, 1, H, W, 4)
+            # If 3D (T, H, W, 4) -> (T, 1, H, W, 4)
             if g_data.ndim == 2:
-                # Means highlighted_pixels is (H, W, 4).
                 layer_data = np.expand_dims(np.expand_dims(highlighted_pixels, axis=0), axis=0)
             elif g_data.ndim == 3:
-                # Means highlighted_pixels is (T, H, W, 4).
                 layer_data = np.expand_dims(highlighted_pixels, axis=1)
             else:
                 layer_data = highlighted_pixels
-    
-            # Determine the cursor mask layer name (using base file name).
+            
+            results[file_name] = layer_data
+
+        return results
+
+    def on_cursor_mask_result(self, results):
+        """
+        Update Napari layers with calculated masks.
+        results: { filename: layer_data_array }
+        """
+        if not hasattr(self, 'cursor_mask_layers'):
+            self.cursor_mask_layers = {}
+
+        for file_name, layer_data in results.items():
             base_name = os.path.splitext(os.path.basename(file_name))[0]
             cursor_layer_name = f"{base_name}_cursor_mask"
-    
-            # Update or add the cursor mask layer for this file.
+            
             if cursor_layer_name in self.viewer.layers:
-                #print(f"Updating existing '{cursor_layer_name}' layer for {file_name}.")
                 self.viewer.layers[cursor_layer_name].data = layer_data
             else:
-                #print(f"Adding new '{cursor_layer_name}' layer for {file_name}.")
                 new_layer = self.viewer.add_image(
                     layer_data,
                     name=cursor_layer_name,
                     colormap=None
                 )
                 self.cursor_mask_layers[file_name] = new_layer
-    
-            # Reorder the cursor mask layer so it is immediately above its corresponding image.
+
             self._order_cursor_mask_above_image(file_name)
     
     
