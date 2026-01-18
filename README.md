@@ -1,6 +1,7 @@
 # FLIMa
-
-<img src="https://github.com/ashsolano/napari-flima/blob/main/docs/source/flima-logo.png?raw=true" alt="napari-flima" width=400>
+<p align="center">
+    <img src="https://github.com/ashsolano/napari-flima/blob/main/docs/source/flima-logo.png?raw=true" alt="napari-flima" width=400>
+</p>
 
 > :warning: This is an early version of the FLIMa software and may not be indicative of a final release. You may encounter issues when using the softwre.
 -----
