@@ -334,6 +334,26 @@ class PhasorWidget(QWidget):
         image_layer.data = updated_data
         image_layer.refresh()
         self.current_mask = mask
+
+        # Force image and overlays to top so they are visible and correctly ordered
+        try:
+             # Move image layer to valid top position
+             current_idx = self.viewer.layers.index(image_layer)
+             target_idx = len(self.viewer.layers) - 1
+             if current_idx < target_idx:
+                 self.viewer.layers.move(current_idx, target_idx)
+             
+             # Move mask overlays to top (immediately above image)
+             # Order: Image -> Red -> Blue
+             for name in [mask_layer_red, mask_layer_blue]:
+                 if name in self.viewer.layers:
+                     l = self.viewer.layers[name]
+                     curr = self.viewer.layers.index(l)
+                     tgt = len(self.viewer.layers) - 1
+                     if curr != tgt:
+                         self.viewer.layers.move(curr, tgt)
+        except ValueError:
+             pass
     
     def _create_or_update_overlay(self, layer_name, rgba_mask):
         """Helper to create or update an overlay layer with the given name."""
