@@ -414,17 +414,39 @@ class PhasorWidget(QWidget):
         # Prepare data for worker
         layer_data = self.file_selection_widget.file_rows[file_name]["layer_data"]
         current_mask = self.current_mask.copy() if self.current_mask is not None else None
-        # Copy intro_params to ensure thread safety (shallow copy is usually enough for dict of primitives)
+        # Copy intro_params to ensure thread safety
         intro_params = self.intro_params.copy()
+
+        # Initialize thread storage if needed
+        if not hasattr(self, "_threads"):
+            self._threads = {}
+        if not hasattr(self, "_graveyard"):
+            self._graveyard = set()
+
+        # Handle existing thread for this file
+        if file_name in self._threads:
+            old_thread, old_worker = self._threads[file_name]
+            if old_thread.isRunning():
+                # Disconnect result signal to prevent stale UI updates
+                try:
+                    old_worker.result.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+                
+                # Move to graveyard to keep alive until finished
+                self._graveyard.add((old_thread, old_worker))
+                # Connect cleanup for this specific thread/worker pair
+                old_thread.finished.connect(lambda t=old_thread, w=old_worker: self._cleanup_graveyard(t, w))
+            else:
+                # If not running, standard cleanup (should have happened, but just in case)
+                pass
 
         # Create worker and thread
         thread = QThread()
         worker = Worker(self.run_phasor_calculation, layer_data, intro_params, current_mask)
         worker.moveToThread(thread)
         
-        # Store references to prevent garbage collection
-        if not hasattr(self, "_threads"):
-            self._threads = {}
+        # Store new thread references
         self._threads[file_name] = (thread, worker)
 
         # Connect signals
@@ -434,12 +456,9 @@ class PhasorWidget(QWidget):
         worker.finished.connect(worker.deleteLater)
         # Cleanup storage when thread finishes
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self._cleanup_thread(file_name))
-        # Only restore cursor if we set it? 
-        # Ideally we track cursor stack, but restoreOverrideCursor is safe if matching set calls.
-        # But here we might call start_worker multiple times.
-        # Simple fix: emit a signal or just assume UI interaction blocked?
-        # Let's just restore cursor at end.
+        # Only clean up from _threads if THIS thread is still the active one
+        thread.finished.connect(lambda t=thread: self._cleanup_active_thread(file_name, t))
+        
         thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
         
         thread.start()
@@ -539,9 +558,20 @@ class PhasorWidget(QWidget):
 
 
      
-    def _cleanup_thread(self, key):
+    def _cleanup_active_thread(self, key, thread):
+        """Removes the thread from storage only if it's the currently active one."""
         if hasattr(self, "_threads") and key in self._threads:
-            del self._threads[key]
+            # Check if the stored thread is the one trying to clean up
+            if self._threads[key][0] == thread:
+                del self._threads[key]
+
+    def _cleanup_graveyard(self, thread, worker):
+        """Removes the thread/worker pair from the graveyard."""
+        if hasattr(self, "_graveyard"):
+            try:
+                self._graveyard.remove((thread, worker))
+            except KeyError:
+                pass
 
     # def replot_phasor(self):
     #     """
@@ -831,6 +861,25 @@ class PhasorWidget(QWidget):
             return
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
+        
+        # Initialize thread storage if needed
+        if not hasattr(self, "_threads"):
+            self._threads = {}
+        if not hasattr(self, "_graveyard"):
+            self._graveyard = set()
+
+        key = 'median_filter'
+        # Handle existing thread
+        if key in self._threads:
+            old_thread, old_worker = self._threads[key]
+            if old_thread.isRunning():
+                try:
+                    old_worker.result.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+                self._graveyard.add((old_thread, old_worker))
+                old_thread.finished.connect(lambda t=old_thread, w=old_worker: self._cleanup_graveyard(t, w))
+
         # We pass a copy/extraction of relevant data to minimize side effects, 
         # though passing file_gs_data dict (keys + pointers to arrays) is generally okay for read-access
         # but let's be explicit if possible. here we just pass the dict.
@@ -838,17 +887,14 @@ class PhasorWidget(QWidget):
         worker = Worker(self.run_median_filter_processing, self.file_gs_data, nsmoothing)
         worker.moveToThread(thread)
         
-        # Store ref
-        if not hasattr(self, "_threads"):
-            self._threads = {}
-        self._threads['median_filter'] = (thread, worker)
+        self._threads[key] = (thread, worker)
 
         thread.started.connect(worker.run)
         worker.result.connect(self.on_median_filter_result)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self._cleanup_thread('median_filter'))
+        thread.finished.connect(lambda t=thread: self._cleanup_active_thread(key, t))
         thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
         
         thread.start()
@@ -1046,22 +1092,37 @@ class PhasorWidget(QWidget):
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
         
+        # Initialize thread storage if needed
+        if not hasattr(self, "_threads"):
+            self._threads = {}
+        if not hasattr(self, "_graveyard"):
+            self._graveyard = set()
+
+        key = 'cursor_update'
+        # Handle existing thread
+        if key in self._threads:
+            old_thread, old_worker = self._threads[key]
+            if old_thread.isRunning():
+                try:
+                    old_worker.result.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+                self._graveyard.add((old_thread, old_worker))
+                old_thread.finished.connect(lambda t=old_thread, w=old_worker: self._cleanup_graveyard(t, w))
+
         # 2) Create Thread & Worker
         thread = QThread()
         worker = Worker(self.calculate_cursor_masks, files_to_process, cursor_params)
         worker.moveToThread(thread)
         
-        # Store ref
-        if not hasattr(self, "_threads"):
-            self._threads = {}
-        self._threads['cursor_update'] = (thread, worker)
+        self._threads[key] = (thread, worker)
 
         thread.started.connect(worker.run)
         worker.result.connect(self.on_cursor_mask_result)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self._cleanup_thread('cursor_update'))
+        thread.finished.connect(lambda t=thread: self._cleanup_active_thread(key, t))
         thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
         
         thread.start()

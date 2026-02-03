@@ -317,7 +317,25 @@ class SegmentationParametersWidget(QWidget):
             return
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        
+        # Initialize thread storage if needed
+        if not hasattr(self, "_threads"):
+            self._threads = {}
+        if not hasattr(self, "_graveyard"):
+            self._graveyard = set()
+
+        key = 'segmentation'
+        # Handle existing thread
+        if key in self._threads:
+            old_thread, old_worker = self._threads[key]
+            if old_thread.isRunning():
+                try:
+                    old_worker.result.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+                self._graveyard.add((old_thread, old_worker))
+                old_thread.finished.connect(lambda t=old_thread, w=old_worker: self._cleanup_graveyard(t, w))
+
         thread = QThread()
         worker = Worker(
             self.run_segmentation_processing,
@@ -325,17 +343,14 @@ class SegmentationParametersWidget(QWidget):
         )
         worker.moveToThread(thread)
         
-        # Store ref
-        if not hasattr(self, "_threads"):
-            self._threads = {}
-        self._threads['segmentation'] = (thread, worker)
+        self._threads[key] = (thread, worker)
 
         thread.started.connect(worker.run)
         worker.result.connect(self.on_segmentation_result)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self._cleanup_thread('segmentation'))
+        thread.finished.connect(lambda t=thread: self._cleanup_active_thread(key, t))
         thread.finished.connect(lambda: QApplication.restoreOverrideCursor())
         
         thread.start()
@@ -366,9 +381,20 @@ class SegmentationParametersWidget(QWidget):
             results[file_name] = (seg_masks, colored_masks)
         return results
 
-    def _cleanup_thread(self, key):
+    def _cleanup_active_thread(self, key, thread):
+        """Removes the thread from storage only if it's the currently active one."""
         if hasattr(self, "_threads") and key in self._threads:
-            del self._threads[key]
+            # Check if the stored thread is the one trying to clean up
+            if self._threads[key][0] == thread:
+                del self._threads[key]
+
+    def _cleanup_graveyard(self, thread, worker):
+        """Removes the thread/worker pair from the graveyard."""
+        if hasattr(self, "_graveyard"):
+            try:
+                self._graveyard.remove((thread, worker))
+            except KeyError:
+                pass
 
     def on_segmentation_result(self, results):
         for file_name, (seg_masks, colored_masks) in results.items():
@@ -1259,9 +1285,6 @@ class ExportResultsWidget(QWidget):
             sns.kdeplot(x=all_intensities, hue=all_groups, log_scale=True, palette=flima_palette[:len(set(all_groups))], ax=ax4)
             plt.savefig(os.path.join(fig_dir, "intensity_summary_kde.png"), bbox_inches="tight")
             plt.close(f4)
-        
-        # 4. Group KDEs? (Already covered by hue above, but original code did separate plots per group)
-        # We'll stick to the combined one for the report as "intensity_summary_kde.png".
         
         return {
             "violin": "figures/violin.png",
