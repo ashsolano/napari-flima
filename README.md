@@ -12,17 +12,17 @@ FLIMa is an open source `napari` widget for performing Fluorescence Lifetime Ima
 
 1. Fetch the package from Github:
 
-    `git clone https://github.com/ashsolano/napari-flima.git`
+        git clone https://github.com/ashsolano/napari-flima.git
 
 2. Install dependencies:
 
         # navigate to the flima root directory
-        `cd ./napari-flima` 
+        cd ./napari-flima 
         # dependency install requires setuptools
-        `pip install .`
+        pip install .
 
 3. Running FLIMa:
    
    To run FLIMa ensure that you've navigated to the napari-flima root directory, then run the GUI script: `.\run.py`
    
-        `python run.py`
+        python run.py
