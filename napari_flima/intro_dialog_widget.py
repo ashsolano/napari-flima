@@ -5,7 +5,8 @@ from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QLabel, QGroupBox,
     QFormLayout, QComboBox, QSpinBox, QCheckBox, QPushButton,
-    QSizePolicy, QScrollArea, QWidget, QHBoxLayout, QMessageBox
+    QSizePolicy, QScrollArea, QWidget, QHBoxLayout, QMessageBox,
+    QDoubleSpinBox
 )
 from napari_flima import get_logo_path
 
@@ -114,14 +115,25 @@ class FLIMDialog(QDialog):
     def _make_acquisition_group(self):
         gb = QGroupBox("Acquisition Settings"); gb.setFont(self.default_font)
         form = QFormLayout()
-        self.combo_type = QComboBox(); self.combo_type.addItems(["TCSPC FLIM", "FD FLIM", "Other"])
+        self.combo_type = QComboBox(); self.combo_type.addItems(["TCSPC FLIM", "FD FLIM", "PTU Raw Data", "Other"])
         self.spin_freq = QSpinBox();  self.spin_freq.setRange(1,100000)
         self.spin_harm = QSpinBox();  self.spin_harm.setRange(1,10)
-        for w in (self.combo_type, self.spin_freq, self.spin_harm):
+        self.spin_g_offset = QDoubleSpinBox(); self.spin_g_offset.setRange(0, 100000); self.spin_g_offset.setDecimals(1); self.spin_g_offset.setValue(32767.5)
+        self.spin_s_offset = QDoubleSpinBox(); self.spin_s_offset.setRange(0, 100000); self.spin_s_offset.setDecimals(1); self.spin_s_offset.setValue(32767.5)
+        self.spin_stack_size = QSpinBox(); self.spin_stack_size.setRange(1, 1000); self.spin_stack_size.setValue(5)
+        for w in (self.combo_type, self.spin_freq, self.spin_harm, self.spin_g_offset, self.spin_s_offset, self.spin_stack_size):
             w.setFont(self.default_font)
+            
+        # Add background and text colors to match QSpinBox styling
+        self.spin_g_offset.setStyleSheet("background-color: white; color: black;")
+        self.spin_s_offset.setStyleSheet("background-color: white; color: black;")
+        
         form.addRow("Select Type:", self.combo_type)
         form.addRow("Laser Frequency (MHz):", self.spin_freq)
         form.addRow("Harmonic:", self.spin_harm)
+        form.addRow("G Offset:", self.spin_g_offset)
+        form.addRow("S Offset:", self.spin_s_offset)
+        form.addRow("Stack Size (n):", self.spin_stack_size)
         gb.setLayout(form)
         return gb
 
@@ -192,7 +204,10 @@ class FLIMDialog(QDialog):
             "harmonic": self.spin_harm.value(),
             "num_channels": self.spin_nch.value(),
             "channel_assignments": [c.currentText() for c in self.channel_combos],
-            "calculate_gs": self.chk_gs.isChecked()
+            "calculate_gs": self.chk_gs.isChecked(),
+            "g_offset": self.spin_g_offset.value(),
+            "s_offset": self.spin_s_offset.value(),
+            "stack_size": self.spin_stack_size.value()
         }
     
     def add_logo(self, layout):

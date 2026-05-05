@@ -484,6 +484,16 @@ class PhasorWidget(QWidget):
         thread.start()
 
     @staticmethod
+    def process_ptu_raw_data(image_data, intro_params):
+        """
+        Unimplemented function to process raw PTU data and calculate lifetime values and g/s coordinates.
+        """
+        stack_size = intro_params.get("stack_size", 5)
+        # TODO: Implement conversion from raw PTU stacks
+        # Return the processed image_data so it can be treated as standard FLIM data
+        raise NotImplementedError("PTU raw data conversion is not yet implemented.")
+
+    @staticmethod
     def run_phasor_calculation(layer_data, intro_params, current_mask):
         intensity, g_image, s_image, orig_g, orig_s = PhasorWidget.calculate_g_s_coordinates(
             layer_data, intro_params, zero_indices=current_mask
@@ -721,6 +731,11 @@ class PhasorWidget(QWidget):
         original_g = None
         original_s = None
     
+        if flim_type == "PTU Raw Data":
+            image_data = PhasorWidget.process_ptu_raw_data(image_data, intro_params)
+            # After initial processing, treat as TCSPC FLIM data
+            flim_type = "TCSPC FLIM"
+
         if flim_type == "FD FLIM":
             # Always works for 2D/3D/4D:
             intensity = extract_channel(image_data, intensity_idx)
@@ -774,9 +789,14 @@ class PhasorWidget(QWidget):
     
             g_values = extract_channel(image_data, g_idx)
             s_values = extract_channel(image_data, s_idx)
-    
-            g_values_m = (g_values - 32767.5) / 32767.5
-            s_values_m = (s_values - 32767.5) / 32767.5
+            g_offset = intro_params.get("g_offset", 32767.5)
+            s_offset = intro_params.get("s_offset", 32767.5)
+            
+            g_divisor = g_offset if g_offset != 0 else 1.0
+            s_divisor = s_offset if s_offset != 0 else 1.0
+
+            g_values_m = (g_values - g_offset) / g_divisor
+            s_values_m = (s_values - s_offset) / s_divisor
     
             original_g = g_values_m.copy()
             original_s = s_values_m.copy()
