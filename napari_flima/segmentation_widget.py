@@ -35,6 +35,7 @@ from bokeh.resources import CDN
 # generalise logo path 
 from napari_flima import get_logo_path
 from .utils import Worker
+from .config import SegmentationConfig, ReportConfig, DownstreamConfig
 from qtpy.QtCore import QThread, Qt
 from qtpy.QtWidgets import QApplication
 from functools import partial
@@ -239,6 +240,24 @@ class SegmentationParametersWidget(QWidget):
         layout.addWidget(self.groupbox)
         layout.addStretch()
         self.setLayout(layout)
+
+    def get_parameters(self) -> SegmentationConfig:
+        return SegmentationConfig(
+            min_size=self.spin_min_size.value(),
+            threshold=self.spin_threshold.value(),
+            iou_threshold=self.spin_iou.value(),
+            max_dist=self.spin_dist.value(),
+            min_persist=self.spin_persist.value()
+        )
+
+    def set_parameters(self, config: SegmentationConfig):
+        if isinstance(config, dict):
+            config = SegmentationConfig(**config)
+        self.spin_min_size.setValue(config.min_size)
+        self.spin_threshold.setValue(config.threshold)
+        self.spin_iou.setValue(config.iou_threshold)
+        self.spin_dist.setValue(config.max_dist)
+        self.spin_persist.setValue(config.min_persist)
 
     def update_num_frames(self):
         print("updating min_persist")
@@ -1026,8 +1045,29 @@ class ExportResultsWidget(QWidget):
         layout.addStretch()
         self.setLayout(layout)
 
-        
         self.logo_path = get_logo_path()
+
+    def get_parameters(self) -> ReportConfig:
+        return ReportConfig(
+            export_intensity=self.export_intensity_cb.isChecked(),
+            export_flim=self.export_flim_cb.isChecked(),
+            export_gs=self.export_gs_cb.isChecked(),
+            export_downstream=self.export_downstream_cb.isChecked(),
+            comparison_group=self.comparison_combo.currentText() if self.comparison_combo.count() > 0 else None,
+            export_directory=self.folder_line_edit.text() if self.folder_line_edit.text() else None,
+        )
+
+    def set_parameters(self, config: ReportConfig):
+        if isinstance(config, dict):
+            config = ReportConfig(**config)
+        self.export_intensity_cb.setChecked(config.export_intensity)
+        self.export_flim_cb.setChecked(config.export_flim)
+        self.export_gs_cb.setChecked(config.export_gs)
+        self.export_downstream_cb.setChecked(config.export_downstream)
+        if config.comparison_group and config.comparison_group in [self.comparison_combo.itemText(i) for i in range(self.comparison_combo.count())]:
+            self.comparison_combo.setCurrentText(config.comparison_group)
+        if config.export_directory:
+            self.folder_line_edit.setText(config.export_directory)
 
     def select_export_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Export Folder")
@@ -2083,4 +2123,17 @@ class MainSegmentationWidget(QWidget):
         # else:
         #     print("No cursor mask layers found in analysis_data.")
     
-    
+    def get_downstream_config(self, cursor_configs: list = None) -> DownstreamConfig:
+        if cursor_configs is None:
+            cursor_configs = []
+        return DownstreamConfig(
+            segmentation=self.seg_params_widget.get_parameters(),
+            cursors=cursor_configs,
+            report=self.export_widget.get_parameters(),
+        )
+
+    def apply_downstream_config(self, config: DownstreamConfig):
+        if config.segmentation:
+            self.seg_params_widget.set_parameters(config.segmentation)
+        if config.report:
+            self.export_widget.set_parameters(config.report)

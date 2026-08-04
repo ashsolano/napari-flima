@@ -6,9 +6,10 @@ from qtpy.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QLabel, QGroupBox,
     QFormLayout, QComboBox, QSpinBox, QCheckBox, QPushButton,
     QSizePolicy, QScrollArea, QWidget, QHBoxLayout, QMessageBox,
-    QDoubleSpinBox
+    QDoubleSpinBox, QFileDialog
 )
 from napari_flima import get_logo_path
+from .config import load_config_from_yaml, IntroConfig, FLIMAnalysisConfig
 
 
 
@@ -100,6 +101,26 @@ class FLIMDialog(QDialog):
         main.setSpacing(12)
 
         self.add_logo(main)
+        self.loaded_config = None
+
+        load_cfg_btn = QPushButton("Load Saved Configuration...")
+        load_cfg_btn.setFont(self.default_font)
+        load_cfg_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        load_cfg_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2e7d32;
+                color: white;
+                font-weight: bold;
+                border-radius: 4px;
+                padding: 6px 10px;
+            }
+            QPushButton:hover {
+                background-color: #1b5e20;
+            }
+        """)
+        load_cfg_btn.clicked.connect(self.load_configuration_from_file)
+        main.addWidget(load_cfg_btn)
+
         main.addWidget(self._make_acquisition_group())
         main.addWidget(self._make_channel_group())
 
@@ -209,6 +230,54 @@ class FLIMDialog(QDialog):
             "s_offset": self.spin_s_offset.value(),
             "stack_size": self.spin_stack_size.value()
         }
+    
+    def load_configuration_from_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Configuration File", "", "YAML Files (*.yaml *.yml)"
+        )
+        if file_path:
+            try:
+                config = load_config_from_yaml(file_path)
+                self.set_parameters(config.intro)
+                self.loaded_config = config
+                QMessageBox.information(
+                    self,
+                    "Configuration Loaded",
+                    f"Successfully loaded configuration from {os.path.basename(file_path)}"
+                )
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Error Loading Configuration",
+                    f"Failed to load configuration file:\n{str(e)}"
+                )
+
+    def set_parameters(self, intro_config: IntroConfig):
+        if intro_config.flim_type in [self.combo_type.itemText(i) for i in range(self.combo_type.count())]:
+            self.combo_type.setCurrentText(intro_config.flim_type)
+        self.spin_freq.setValue(intro_config.laser_frequency)
+        self.spin_harm.setValue(intro_config.harmonic)
+        self.spin_g_offset.setValue(intro_config.g_offset)
+        self.spin_s_offset.setValue(intro_config.s_offset)
+        self.spin_stack_size.setValue(intro_config.stack_size)
+        self.spin_nch.setValue(intro_config.num_channels)
+        
+        # update channel combo choices
+        for idx, assignment in enumerate(intro_config.channel_assignments):
+            if idx < len(self.channel_combos):
+                combo = self.channel_combos[idx]
+                if assignment in [combo.itemText(i) for i in range(combo.count())]:
+                    combo.setCurrentText(assignment)
+        self.chk_gs.setChecked(intro_config.calculate_gs)
+
+    def get_full_config(self) -> FLIMAnalysisConfig:
+        intro_dict = self.get_parameters()
+        intro_cfg = IntroConfig(**intro_dict)
+        if self.loaded_config is None:
+            self.loaded_config = FLIMAnalysisConfig(intro=intro_cfg)
+        else:
+            self.loaded_config.intro = intro_cfg
+        return self.loaded_config
     
     def add_logo(self, layout):
         """Adds a centered logo at the top."""

@@ -26,6 +26,7 @@ from functools import partial
 from .utils import (
     ColorSelectorApp
 )
+from .config import CursorConfig
 
 import imageio
 
@@ -240,3 +241,60 @@ class CursorAnalysisWidget(QGroupBox):
                     "tau_p": float(rd["col_6"].text()),
                 })
         return settings
+
+    def clear_cursors(self):
+        """Remove all cursor rows."""
+        while self.table.rowCount() > 0:
+            self._remove_cursor_row(0)
+
+    def get_all_cursor_configs(self) -> list:
+        """Return list of CursorConfig for all rows (both active and inactive)."""
+        configs = []
+        for rd in self.cursor_rows_data:
+            configs.append(CursorConfig(
+                active=rd["checkbox"].isChecked(),
+                color=rd["color_selector"].currentText(),
+                radius=float(rd["col_2"].text()),
+                g_value=float(rd["col_3"].text()),
+                s_value=float(rd["col_4"].text()),
+                tau_m=float(rd["col_5"].text()),
+                tau_p=float(rd["col_6"].text()),
+            ))
+        return configs
+
+    def set_cursor_settings(self, cursor_configs: list):
+        """Clear existing rows and populate cursor table from cursor configs."""
+        self.clear_cursors()
+        for cfg in cursor_configs:
+            self.add_cursor_row()
+            row = self.table.rowCount() - 1
+            rd = self.cursor_rows_data[row]
+            
+            if isinstance(cfg, CursorConfig):
+                active = cfg.active
+                color = cfg.color
+                radius = cfg.radius
+                g_val = cfg.g_value
+                s_val = cfg.s_value
+                tau_m = cfg.tau_m
+                tau_p = cfg.tau_p
+            else:
+                active = cfg.get("active", True)
+                color = cfg.get("color", "red")
+                radius = cfg.get("radius", 0.05)
+                g_val = cfg.get("g_value", 0.0)
+                s_val = cfg.get("s_value", 0.0)
+                tau_m = cfg.get("tau_m", 0.0)
+                tau_p = cfg.get("tau_p", 0.0)
+
+            rd["checkbox"].setChecked(active)
+            if color in [rd["color_selector"].itemText(i) for i in range(rd["color_selector"].count())]:
+                rd["color_selector"].setCurrentText(color)
+            
+            self.table.blockSignals(True)
+            rd["col_2"].setText(str(radius))
+            rd["col_3"].setText(str(g_val))
+            rd["col_4"].setText(str(s_val))
+            rd["col_5"].setText(str(tau_m))
+            rd["col_6"].setText(str(tau_p))
+            self.table.blockSignals(False)

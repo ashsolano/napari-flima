@@ -18,7 +18,7 @@ from qtpy.QtWidgets import (
     QLineEdit, QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox, QStyledItemDelegate,
     QStyle, QStyleOptionComboBox, QStyleOptionGroupBox, QScrollArea, QSizePolicy, QGroupBox, QLabel,
     QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QFormLayout,
-    QGridLayout, QFileDialog, QSlider, QToolTip
+    QGridLayout, QFileDialog, QSlider, QToolTip, QMessageBox
 )
 from functools import partial
 
@@ -30,6 +30,11 @@ from .cursor_analysis import CursorAnalysisWidget
 
 from .utils import (
     extract_channel, ColorSelectorApp, PlotCanvas, Worker
+)
+
+from .config import (
+    FLIMAnalysisConfig, IntroConfig, DownstreamConfig,
+    load_config_from_yaml, save_config_to_yaml
 )
 
 #------------------------------------------------------------------------------
@@ -46,7 +51,18 @@ class PhasorWidget(QWidget):
         
         self.viewer = viewer
         self.dialog = dialog
-        self.intro_params = intro_params
+        self.seg_widget = None
+
+        if isinstance(intro_params, FLIMAnalysisConfig):
+            self.full_config = intro_params
+            self.intro_params = intro_params.intro.model_dump()
+        elif isinstance(intro_params, dict):
+            self.intro_params = intro_params
+            self.full_config = FLIMAnalysisConfig(intro=IntroConfig(**intro_params))
+        else:
+            self.intro_params = {}
+            self.full_config = FLIMAnalysisConfig()
+
         self.file_gs_data = {}
         self.smoothed_gs_data = {}
         self.median_filter_applied = False
@@ -58,11 +74,69 @@ class PhasorWidget(QWidget):
         self.lifetime_layers = {}          # key: file_name, value: lifetime layer (tau_av)
         self.cursor_mask_layers = {}       # key: file_name, value: cursor mask layer
         
-        
-        
         layout = QVBoxLayout()
         self.setLayout(layout)
+
+        # --- Configuration Management Section ---
+        cfg_group = QGroupBox("🛈 Configuration Settings")
+        cfg_group.setFont(self.font())
+        cfg_group.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid #707070;
+                background-color: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #282a36, stop:1 #33353b
+                );
+                margin-top: 10px;
+                padding: 5px;
+                border-radius: 5px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+                color: #f8f8f2;
+            }
+        """)
+        cfg_layout = QHBoxLayout(cfg_group)
+        cfg_layout.setContentsMargins(5, 5, 5, 5)
+        cfg_layout.setSpacing(6)
+
+        save_cfg_btn = QPushButton("Save Config (YAML)...")
+        save_cfg_btn.setFont(QFont("Arial", 11))
+        save_cfg_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #007acc;
+                color: white;
+                font-weight: bold;
+                border-radius: 4px;
+                padding: 6px 10px;
+            }
+            QPushButton:hover {
+                background-color: #005f99;
+            }
+        """)
+        save_cfg_btn.clicked.connect(self.save_configuration_to_file)
         
+        load_cfg_btn = QPushButton("Load Config (YAML)...")
+        load_cfg_btn.setFont(QFont("Arial", 11))
+        load_cfg_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2e7d32;
+                color: white;
+                font-weight: bold;
+                border-radius: 4px;
+                padding: 6px 10px;
+            }
+            QPushButton:hover {
+                background-color: #1b5e20;
+            }
+        """)
+        load_cfg_btn.clicked.connect(self.load_configuration_to_file)
+        
+        cfg_layout.addWidget(save_cfg_btn)
+        cfg_layout.addWidget(load_cfg_btn)
+        layout.addWidget(cfg_group)
         
         # --- File Selection Section ---
         self.file_selection_widget = FileSelectionTable(self, title="🛈 &File Selection")
@@ -70,21 +144,22 @@ class PhasorWidget(QWidget):
         self.file_selection_widget.mask_changed.connect(self.on_mask_changed)
         layout.addWidget(self.file_selection_widget)
         
-    
-        
         # --- Cursor Analysis Section ---
         self.cursor_analysis_widget = CursorAnalysisWidget(self, title="🛈 &Cursor Analysis", font=self.font())
         layout.addWidget(self.cursor_analysis_widget)
-        
 
-        
+        # Apply saved configurations to sub-widgets
+        if self.full_config:
+            self.file_selection_widget.apply_file_configs(self.full_config.file_selection)
+            if self.full_config.downstream and self.full_config.downstream.cursors:
+                self.cursor_analysis_widget.set_cursor_settings(self.full_config.downstream.cursors)
+
         # --- Button to Open Phasor Plot Dialog ---
         open_dialog_btn = QPushButton("Open Phasor Plot")
         open_dialog_btn.setFont(QFont("Arial", 12))
         open_dialog_btn.setStyleSheet("background-color: #007acc; color: white; padding: 8px; border-radius: 4px;")
         open_dialog_btn.clicked.connect(self.open_phasor_plot_dialog)
         layout.addWidget(open_dialog_btn)
-        
         
         layout.addStretch()
         self.setLayout(layout)
@@ -1316,4 +1391,83 @@ class PhasorWidget(QWidget):
             data["group_list"] = self.file_selection_widget.get_group_list()
             # Also add the file mapping, which is a dict of file_name -> group name.
             data["file_group_mapping"] = self.file_selection_widget.get_file_group_mapping()
-        return data     
+        return data
+
+    def save_configuration_to_file(self):
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Configuration File", "flim_analysis_config.yaml", "YAML Files (*.yaml *.yml)"
+        )
+        if file_path:
+            try:
+                full_cfg = self.get_full_config()
+                save_config_to_yaml(full_cfg, file_path)
+                QMessageBox.information(
+                    self,
+                    "Configuration Saved",
+                    f"Successfully saved configuration to {os.path.basename(file_path)}"
+                )
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Error Saving Configuration",
+                    f"Failed to save configuration:\n{str(e)}"
+                )
+
+    def load_configuration_to_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Load Configuration File", "", "YAML Files (*.yaml *.yml)"
+        )
+        if file_path:
+            try:
+                full_cfg = load_config_from_yaml(file_path)
+                self.apply_full_config(full_cfg)
+                QMessageBox.information(
+                    self,
+                    "Configuration Loaded",
+                    f"Successfully loaded configuration from {os.path.basename(file_path)}"
+                )
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Error Loading Configuration",
+                    f"Failed to load configuration:\n{str(e)}"
+                )
+
+    def get_full_config(self) -> FLIMAnalysisConfig:
+        if isinstance(self.intro_params, dict):
+            try:
+                intro_cfg = IntroConfig(**self.intro_params)
+            except Exception:
+                intro_cfg = IntroConfig()
+        elif isinstance(self.intro_params, IntroConfig):
+            intro_cfg = self.intro_params
+        else:
+            intro_cfg = IntroConfig()
+
+        file_cfg = self.file_selection_widget.get_file_configs()
+        cursor_cfgs = self.cursor_analysis_widget.get_all_cursor_configs()
+
+        if hasattr(self, "seg_widget") and self.seg_widget is not None:
+            downstream_cfg = self.seg_widget.get_downstream_config(cursor_configs=cursor_cfgs)
+        else:
+            existing_ds = self.full_config.downstream if (hasattr(self, "full_config") and self.full_config) else DownstreamConfig()
+            downstream_cfg = DownstreamConfig(
+                segmentation=existing_ds.segmentation,
+                cursors=cursor_cfgs,
+                report=existing_ds.report,
+            )
+
+        return FLIMAnalysisConfig(
+            intro=intro_cfg,
+            file_selection=file_cfg,
+            downstream=downstream_cfg,
+        )
+
+    def apply_full_config(self, config: FLIMAnalysisConfig):
+        self.full_config = config
+        self.intro_params = config.intro.model_dump()
+        self.file_selection_widget.apply_file_configs(config.file_selection)
+        if config.downstream and config.downstream.cursors:
+            self.cursor_analysis_widget.set_cursor_settings(config.downstream.cursors)
+        if hasattr(self, "seg_widget") and self.seg_widget is not None and config.downstream:
+            self.seg_widget.apply_downstream_config(config.downstream)

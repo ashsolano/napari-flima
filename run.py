@@ -23,17 +23,20 @@ def main():
         # User cancelled → exit without ever showing Napari
         return
 
-    intro_params = flim_dialog.get_parameters()
+    full_config = flim_dialog.get_full_config()
 
     # 3) Build Phasor + Segmentation widgets
     phasor_plot_dialog = PhasorPlotDialog(parent=viewer.window._qt_window)
-    phasor_widget      = PhasorWidget(viewer, phasor_plot_dialog, intro_params)
+    phasor_widget      = PhasorWidget(viewer, phasor_plot_dialog, full_config)
     analysis_data      = phasor_widget.get_analysis_data()
     seg_widget         = MainSegmentationWidget(
         viewer,
         analysis_data=analysis_data,
         phasor_widget=phasor_widget
     )
+    phasor_widget.seg_widget = seg_widget
+    if full_config and full_config.downstream:
+        seg_widget.apply_downstream_config(full_config.downstream)
 
     # 4) Create a docking panel with tabs
     main_widget = QWidget()

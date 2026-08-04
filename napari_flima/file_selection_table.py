@@ -22,6 +22,7 @@ from qtpy.QtWidgets import (
 from functools import partial
 
 from .group_assignment_dialog import GroupAssignmentWindow
+from .config import FileSelectionConfig, SingleFileConfig
 
 import imageio
 
@@ -76,7 +77,7 @@ class FileSelectionTable(QGroupBox):
 
         self.file_rows = {}   # {file_name: {... row references ...}}
         self.known_groups = ["None", "Condition 1", "Condition 2"]  # Default group names
-        #self.analysis_data["group_list"] = self.known_groups
+        self.saved_file_configs = {}  # {file_name: SingleFileConfig}
         
         main_layout = QVBoxLayout(self)
         main_layout.setSpacing(8)
@@ -475,3 +476,45 @@ class FileSelectionTable(QGroupBox):
         :meta public:
         """
         self.file_rows[file_name]["group_combo"].setCurrentIndex(self.known_groups.index(group))
+
+    def get_file_configs(self) -> FileSelectionConfig:
+        files = {}
+        for file_name, row_info in self.file_rows.items():
+            slider_val = row_info["slider"].value()
+            files[file_name] = SingleFileConfig(
+                file_name=file_name,
+                group=row_info["group_combo"].currentText(),
+                mask_layer=row_info["mask_combo"].currentText(),
+                threshold_lower=int(slider_val[0]),
+                threshold_upper=int(slider_val[1]),
+            )
+        for fn, cfg in self.saved_file_configs.items():
+            if fn not in files:
+                files[fn] = cfg
+
+        return FileSelectionConfig(
+            known_groups=list(self.known_groups),
+            files=files
+        )
+
+    def apply_file_configs(self, config: FileSelectionConfig):
+        for g in config.known_groups:
+            if g not in self.known_groups:
+                self.known_groups.append(g)
+        self.known_groups.sort()
+        self.update_all_combos()
+        
+        self.saved_file_configs.update(config.files)
+
+        for file_name, cfg in config.files.items():
+            if file_name in self.file_rows:
+                row_info = self.file_rows[file_name]
+                if cfg.group in self.known_groups:
+                    row_info["group_combo"].setCurrentText(cfg.group)
+                mask_combo = row_info["mask_combo"]
+                if cfg.mask_layer in [mask_combo.itemText(i) for i in range(mask_combo.count())]:
+                    mask_combo.setCurrentText(cfg.mask_layer)
+                row_info["slider"].setValue((cfg.threshold_lower, cfg.threshold_upper))
+                row_info["val_low_label"].setText(str(cfg.threshold_lower))
+                row_info["val_high_label"].setText(str(cfg.threshold_upper))
+                self.threshold_changed.emit(file_name, (cfg.threshold_lower, cfg.threshold_upper))
